@@ -22,25 +22,23 @@ standardEscape :: Parser Char Char
 standardEscape = expected standardEscape' "standard escape sequence" where
   standardEscape' = do
     C.char '\\'
-    c <- C.oneOf "\\/\"bfnrt"
-    pure $ case c of
-      'b' -> '\b'
-      'f' -> '\f'
-      'n' -> '\n'
-      'r' -> '\r'
-      't' -> '\t'
-      other -> other
+    cut do
+      c <- C.oneOf "\\/\"bfnrt"
+      pure $ case c of
+        'b' -> '\b'
+        'f' -> '\f'
+        'n' -> '\n'
+        'r' -> '\r'
+        't' -> '\t'
+        other -> other
 
 hexDigit :: Parser Char Char
 hexDigit = expected (sat isHexDigit) "hex digit"
 
 unicodeEscape :: Parser Char Char
-unicodeEscape = expected unicodeEscape' "unicode escape"
-
-unicodeEscape' :: Parser Char Char
-unicodeEscape' = do
-    S.string "\\u"
-    ds <- replicateM 4 hexDigit
+unicodeEscape = do
+    expected (S.string "\\u") "unicode escape sequence"
+    ds <- cut $ expected (replicateM 4 hexDigit) "invalid unicode escape sequence"
     decodeChar ds
   where
     decodeChar :: forall f. (Foldable f) => f Char -> Parser Char Char
@@ -59,12 +57,12 @@ booleanLiteral = expected booleanLiteral' "boolean literal" where
                 <|> (S.string "false" <#> \_ -> BooleanLiteral false)
 
 stringLiteral :: Parser Char Pattern
-stringLiteral = expected stringLiteral' "string literal" where
-  stringLiteral' = do
-    C.char '"'
-    cs <- cut $ many $ stringChar <|> unicodeEscape <|> standardEscape
-    C.char '"'
-    pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
+stringLiteral = do
+    expected (C.char '"') "string literal"
+    cut do
+      cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
+      expected (C.char '"') "unterminated string literal"
+      pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
 
 stringDataType :: Parser Char Pattern
 stringDataType = expected stringDataType' "string data type" where
