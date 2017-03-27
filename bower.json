@@ -13,9 +13,15 @@
     "purescript-unicode": "^2.0.2",
     "purescript-integers": "^2.1.1",
     "purescript-eulalie": "^4.1.0",
-    "purescript-foldable-traversable": "^2.2.0"
+    "purescript-foldable-traversable": "^2.2.0",
+    "purescript-quickcheck": "^3.1.1",
+    "purescript-generics": "^3.3.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^2.0.0"
+  },
+  "resolutions": {
+    "purescript-maybe": "^2.1.1",
+    "purescript-foldable-traversable": "^2.2.0"
   }
 }

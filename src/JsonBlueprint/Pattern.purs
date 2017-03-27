@@ -1,7 +1,11 @@
 module JsonBlueprint.Pattern where
 
 import Prelude
+import Data.Generic (class Generic, gEq)
 import Data.Maybe (Maybe)
+import JsonBlueprint.Pattern (Pattern(..))
+import Test.QuickCheck.Arbitrary (class Arbitrary, arbitrary)
+import Test.QuickCheck.Gen (Gen, oneOf)
 
 data Pattern = Empty
              | BooleanLiteral Boolean
@@ -20,3 +24,17 @@ instance showPattern :: Show Pattern where
 
 -- or :: Pattern -> Pattern -> Pattern
 -- or = Choice
+
+derive instance genericPattern :: Generic Pattern
+
+instance eqPattern :: Eq Pattern where
+  eq = gEq
+
+genBooleanLiteral :: Gen Pattern
+genBooleanLiteral = BooleanLiteral <$> arbitrary
+
+genStringLiteral :: Gen Pattern
+genStringLiteral = StringLiteral <$> arbitrary
+
+instance arbPattern :: Arbitrary Pattern where
+  arbitrary = oneOf genBooleanLiteral [genStringLiteral]
