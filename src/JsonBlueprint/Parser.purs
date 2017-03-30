@@ -2,18 +2,20 @@ module JsonBlueprint.Parser where
 
 import Prelude
 import Data.Eulalie.Char as C
+import Data.Eulalie.Parser (cut, either, expected, fail, many, Parser, sat, sepBy)
 import Data.Eulalie.String as S
+import Data.Foldable (class Foldable, foldl)
 import Control.Alt ((<|>))
+import Data.Array.Partial (head, tail)
 import Data.Array (fromFoldable)
 import Data.Char (fromCharCode)
 import Data.Char.Unicode (isHexDigit)
-import Data.Eulalie.Parser (Parser, cut, expected, fail, many, sat)
-import Data.Foldable (class Foldable)
-import Data.Int (fromStringAs, hexadecimal)
+import Data.Int (fromString, fromStringAs, hexadecimal)
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
-import Data.String (fromCharArray)
+import Data.String (fromCharArray, singleton)
 import JsonBlueprint.Pattern (Pattern(..))
+import Partial.Unsafe (unsafePartial)
 
 stringChar :: Parser Char Char
 stringChar =  sat \c -> c /= '\\' && c /= '"'
@@ -45,16 +47,67 @@ unicodeEscape = do
     decodeChar cs =
       let optCharCode = (fromFoldable >>> fromCharArray >>> (fromStringAs hexadecimal)) cs in
         case optCharCode of
-          Just charCode -> pure $ fromCharCode charCode
-          Nothing -> fail
+         Just charCode -> pure $ fromCharCode charCode
+         Nothing -> fail
+
+zeroP :: Parser Char Int
+zeroP = const 0 <$> C.char '0'
+
+nonNegativeInt :: Parser Char Int
+nonNegativeInt = expected nonNegativeInt' "non-negative integer" where
+  nonNegativeInt' = zeroP <|> do
+    first <- C.oneOf "123456789"
+    rest <- C.many C.digit
+    case fromString (singleton first <> rest) of
+      Just n -> pure n
+      Nothing -> fail
+
+prop :: forall v d. String -> Parser Char v -> (v -> d -> d) -> Parser Char (d -> d)
+prop name valP f = do
+  S.spaces
+  S.string name
+  S.spaces
+  C.char '='
+  cut do
+    S.spaces
+    val <- valP
+    S.spaces
+    pure $ f val
+
+commaSeparator :: Parser Char Unit
+commaSeparator = do
+  S.spaces
+  C.char ','
+  S.spaces
+  pure unit
+
+-- TODO: improve error reporting for misspelled property names
+props :: forall d. d -> Array (Parser Char (d -> d)) -> Parser Char d
+props a b = (propList a b) <|> pure a
+  where
+    propList :: d -> Array (Parser Char (d -> d)) -> Parser Char d
+    propList dt propParsers = do
+      S.spaces
+      C.char '('
+      cut do
+        S.spaces
+        ps <- sepBy commaSeparator (reduce propParsers)
+        S.spaces
+        C.char ')'
+        S.spaces
+        pure $ foldl (#) dt ps
+
+    reduce :: Array (Parser Char (d -> d)) -> Parser Char (d -> d)
+    reduce [] = pure id
+    reduce ps = unsafePartial $ foldl either (head ps) (tail ps)
 
 booleanDataType :: Parser Char Pattern
 booleanDataType = expected (S.string "Boolean" <#> (\_ -> BooleanDataType)) "boolean data type"
 
 booleanLiteral :: Parser Char Pattern
 booleanLiteral = expected booleanLiteral' "boolean literal" where
-  booleanLiteral' = (S.string "true" <#> \_ -> BooleanLiteral true)
-                <|> (S.string "false" <#> \_ -> BooleanLiteral false)
+  booleanLiteral' = (const (BooleanLiteral true)  <$> S.string "true")
+                <|> (const (BooleanLiteral false) <$> S.string "false")
 
 stringLiteral :: Parser Char Pattern
 stringLiteral = do
@@ -65,8 +118,12 @@ stringLiteral = do
       pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
 
 stringDataType :: Parser Char Pattern
-stringDataType = expected stringDataType' "string data type" where
-  stringDataType' = S.string  "String" <#> (\_ -> StringDataType { minLength: Nothing, maxLength: Nothing })
+stringDataType = do
+  S.string "String"
+  ps <- props { minLength: Nothing, maxLength: Nothing } [
+    prop "minLength" nonNegativeInt (\i ps -> ps { minLength = Just i }),
+    prop "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
+  pure $ StringDataType ps
 
 valuePattern :: Parser Char Pattern
 valuePattern =

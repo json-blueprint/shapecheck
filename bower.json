@@ -18,7 +18,8 @@
     "purescript-generics": "^3.3.0"
   },
   "devDependencies": {
-    "purescript-psci-support": "^2.0.0"
+    "purescript-psci-support": "^2.0.0",
+    "purescript-jack": "^1.0.0"
   },
   "resolutions": {
     "purescript-maybe": "^2.1.1",
