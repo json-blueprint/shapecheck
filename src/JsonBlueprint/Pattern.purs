@@ -11,7 +11,7 @@ data Pattern = Empty
              | BooleanDataType
              | StringLiteral String
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int }
---             | Choice Pattern Pattern
+             | Choice Pattern Pattern
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
@@ -22,18 +22,18 @@ instance showPattern :: Show Pattern where
       prop "minLength" minLength,
       prop "maxLength" maxLength
     ]
---  show (Choice p1 p2)        = (show p1) <> " | " <> (show p2)
-    where
-      prop :: forall a. String -> Maybe a -> Maybe { name :: String, value :: a }
-      prop n optV = { name: n, value: _ } <$> optV
+  show (Choice p1 p2)       = (show p1) <> " | " <> (show p2)
 
-      showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
-      showProps xs =
-        case printedProps of
-          [] -> ""
-          ps -> "(" <> intercalate ", " ps <> ")"
-        where
-          printedProps = (\p -> p.name <> " = " <> show p.value) <$> catMaybes xs
+showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
+showProps xs =
+  case printedProps of
+    [] -> ""
+    ps -> "(" <> intercalate ", " ps <> ")"
+  where
+    printedProps = (\p -> p.name <> " = " <> show p.value) <$> catMaybes xs
+
+prop :: forall a. String -> Maybe a -> Maybe { name :: String, value :: a }
+prop n optV = { name: n, value: _ } <$> optV
 
 -- or :: Pattern -> Pattern -> Pattern
 -- or = Choice

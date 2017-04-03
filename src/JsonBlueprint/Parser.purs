@@ -2,14 +2,14 @@ module JsonBlueprint.Parser where
 
 import Prelude
 import Data.Eulalie.Char as C
-import Data.Eulalie.Parser (cut, either, expected, fail, many, Parser, sat, sepBy)
 import Data.Eulalie.String as S
-import Data.Foldable (class Foldable, foldl)
 import Control.Alt ((<|>))
-import Data.Array.Partial (head, tail)
 import Data.Array (fromFoldable)
+import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode)
 import Data.Char.Unicode (isHexDigit)
+import Data.Eulalie.Parser (cut, either, expected, fail, many, Parser, sat, sepBy)
+import Data.Foldable (class Foldable, foldl)
 import Data.Int (fromString, fromStringAs, hexadecimal)
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
@@ -102,20 +102,19 @@ props a b = (propList a b) <|> pure a
     reduce ps = unsafePartial $ foldl either (head ps) (tail ps)
 
 booleanDataType :: Parser Char Pattern
-booleanDataType = expected (S.string "Boolean" <#> (\_ -> BooleanDataType)) "boolean data type"
+booleanDataType = S.string "Boolean" <#> (\_ -> BooleanDataType)
 
 booleanLiteral :: Parser Char Pattern
-booleanLiteral = expected booleanLiteral' "boolean literal" where
-  booleanLiteral' = (const (BooleanLiteral true)  <$> S.string "true")
-                <|> (const (BooleanLiteral false) <$> S.string "false")
+booleanLiteral = (const (BooleanLiteral true)  <$> S.string "true")
+             <|> (const (BooleanLiteral false) <$> S.string "false")
 
 stringLiteral :: Parser Char Pattern
 stringLiteral = do
-    expected (C.char '"') "string literal"
-    cut do
-      cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
-      expected (C.char '"') "unterminated string literal"
-      pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
+  expected (C.char '"') "string literal"
+  cut do
+    cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
+    expected (C.char '"') "unterminated string literal"
+    pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
 
 stringDataType :: Parser Char Pattern
 stringDataType = do
@@ -125,9 +124,23 @@ stringDataType = do
     prop "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
   pure $ StringDataType ps
 
-valuePattern :: Parser Char Pattern
-valuePattern =
+nonChoiceValuePattern :: Parser Char Pattern
+nonChoiceValuePattern =
   booleanLiteral <|>
   booleanDataType <|>
   stringLiteral <|>
   stringDataType
+
+valuePattern :: Parser Char Pattern
+valuePattern = do
+    vp <- nonChoiceValuePattern
+    S.spaces
+    (parseChoice vp) <|> pure vp
+  where
+    parseChoice :: Pattern -> Parser Char Pattern
+    parseChoice first = do
+      C.char '|'
+      cut do
+        S.spaces
+        second <- valuePattern
+        pure $ Choice first second
