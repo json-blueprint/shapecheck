@@ -12,6 +12,7 @@ data Pattern = Empty
              | StringLiteral String
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int }
              | Choice Pattern Pattern
+             | ArrayPattern (Array Pattern)
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
@@ -23,6 +24,7 @@ instance showPattern :: Show Pattern where
       prop "maxLength" maxLength
     ]
   show (Choice p1 p2)       = (show p1) <> " | " <> (show p2)
+  show (ArrayPattern ps)    = "[" <> intercalate ", " (show <$> ps) <> "]"
 
 showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
 showProps xs =

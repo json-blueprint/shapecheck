@@ -8,14 +8,20 @@ import Data.Array (fromFoldable)
 import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode)
 import Data.Char.Unicode (isHexDigit)
-import Data.Eulalie.Parser (cut, either, expected, fail, many, Parser, sat, sepBy)
+import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, sat, sepBy)
 import Data.Foldable (class Foldable, foldl)
 import Data.Int (fromString, fromStringAs, hexadecimal)
+import Data.Lazy (Lazy, defer, force)
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
 import Data.String (fromCharArray, singleton)
 import JsonBlueprint.Pattern (Pattern(..))
 import Partial.Unsafe (unsafePartial)
+
+lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
+lazyParser lp = do
+  pure unit
+  force lp
 
 stringChar :: Parser Char Char
 stringChar =  sat \c -> c /= '\\' && c /= '"'
@@ -124,12 +130,22 @@ stringDataType = do
     prop "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
   pure $ StringDataType ps
 
+arrayPattern :: Parser Char Pattern
+arrayPattern = do
+  C.char '['
+  S.spaces
+  vs <- sepBy commaSeparator valuePattern
+  S.spaces
+  C.char ']'
+  pure $ ArrayPattern (fromFoldable vs)
+
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
   booleanLiteral <|>
   booleanDataType <|>
   stringLiteral <|>
-  stringDataType
+  stringDataType <|>
+  lazyParser (defer \u -> arrayPattern)
 
 valuePattern :: Parser Char Pattern
 valuePattern = do
