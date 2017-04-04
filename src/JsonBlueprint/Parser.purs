@@ -15,7 +15,7 @@ import Data.Lazy (Lazy, defer, force)
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
 import Data.String (fromCharArray, singleton)
-import JsonBlueprint.Pattern (group, Pattern(..))
+import JsonBlueprint.Pattern (Pattern(..), RepeatCount(..), group)
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -112,7 +112,6 @@ booleanDataType = S.string "Boolean" <#> (\_ -> BooleanDataType)
 
 booleanLiteral :: Parser Char Pattern
 booleanLiteral = (const (BooleanLiteral true)  <$> S.string "true")
-
              <|> (const (BooleanLiteral false) <$> S.string "false")
 
 stringLiteral :: Parser Char Pattern
@@ -131,20 +130,6 @@ stringDataType = do
     prop "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
   pure $ StringDataType ps
 
-withChoice :: Parser Char Pattern -> Parser Char Pattern
-withChoice contentP = do
-    first <- contentP
-    S.spaces
-    (parseChoice first) <|> pure first
-  where
-    parseChoice :: Pattern -> Parser Char Pattern
-    parseChoice first = do
-      C.char '|'
-      cut do
-        S.spaces
-        second <- lazyParser (defer \u -> withChoice contentP)
-        pure $ Choice first second
-
 groupParser :: Parser Char Pattern -> Parser Char Pattern
 groupParser itemParser = do
   C.char '('
@@ -154,6 +139,58 @@ groupParser itemParser = do
     S.spaces
     C.char ')'
     pure $ foldl group Empty items
+
+withChoice :: Parser Char Pattern -> Parser Char Pattern
+withChoice contentP = do
+    first <- contentP
+    cut do
+      S.spaces
+      (parseChoice first) <|> pure first
+  where
+    parseChoice :: Pattern -> Parser Char Pattern
+    parseChoice first = do
+      C.char '|'
+      cut do
+        S.spaces
+        second <- lazyParser (defer \_ -> withChoice contentP)
+        pure $ Choice first second
+
+repeatable :: Parser Char Pattern -> Parser Char Pattern
+repeatable valueParser = do
+  value <- valueParser
+  cut do
+    S.spaces
+    count <- (Just <$> repeatCount) <|> pure Nothing
+    pure $ case count of
+      Just c  -> Repeat value c
+      Nothing -> value
+
+repeatCount :: Parser Char RepeatCount
+repeatCount =
+    (const (RepeatCount { min: 0, max: Just 1 }) <$> C.char '?') <|>
+    (const (RepeatCount { min: 0, max: Nothing }) <$> C.char '*') <|>
+    (const (RepeatCount { min: 1, max: Nothing }) <$> C.char '+') <|>
+    parseBounds
+  where
+    parseUpperBound :: Parser Char (Maybe Int)
+    parseUpperBound = do
+      C.char ','
+      cut do
+        S.spaces
+        max <- (Just <$> nonNegativeInt) <|> pure Nothing
+        S.spaces
+        C.char '}'
+        pure max
+
+    parseBounds :: Parser Char RepeatCount
+    parseBounds = do
+      C.char '{'
+      cut do
+        S.spaces
+        min <- nonNegativeInt
+        S.spaces
+        max <- (const (Just min) <$> C.char '}') <|> parseUpperBound
+        pure $ RepeatCount { min, max }
 
 arrayPattern :: Parser Char Pattern
 arrayPattern = do
@@ -166,7 +203,7 @@ arrayPattern = do
       pure $ ArrayPattern vs
   where
     arrayGroup :: Parser Char Pattern
-    arrayGroup = lazyParser (defer \u -> groupParser arrayContent)
+    arrayGroup = lazyParser (defer \_ -> groupParser arrayContent)
 
     nonChoiceArrayContent :: Parser Char Pattern
     nonChoiceArrayContent =
@@ -174,7 +211,7 @@ arrayPattern = do
       lazyParser (defer \u -> arrayGroup)
 
     arrayContent :: Parser Char Pattern
-    arrayContent = withChoice $ lazyParser (defer \u -> nonChoiceArrayContent)
+    arrayContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceArrayContent)
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
@@ -185,4 +222,4 @@ nonChoiceValuePattern =
   lazyParser (defer \u -> arrayPattern)
 
 valuePattern :: Parser Char Pattern
-valuePattern = withChoice nonChoiceValuePattern
+valuePattern = withChoice <<< repeatable $ nonChoiceValuePattern

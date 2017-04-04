@@ -4,8 +4,20 @@ import Prelude
 import Data.Array (catMaybes, intercalate)
 import Data.Generic (class Generic, gEq)
 import Data.List (concat, List(..), (:))
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import JsonBlueprint.Pattern (Pattern(..))
+
+newtype RepeatCount = RepeatCount { min :: Int, max :: Maybe Int }
+
+instance showRepeatCount :: Show RepeatCount where
+  show (RepeatCount { min: 0, max: Just 1 })  = "?"
+  show (RepeatCount { min: 0, max: Nothing }) = "*"
+  show (RepeatCount { min: 1, max: Nothing }) = "+"
+  show (RepeatCount { min, max: Nothing }) = "{" <> show min <> ",}"
+  show (RepeatCount { min, max: Just max }) | min == max = "{" <> show min <> "}"
+                                            | otherwise = "{" <> show min <> ", " <> show max <> "}"
+
+derive instance genericRepeatCount :: Generic RepeatCount
 
 data Pattern = Empty
              | BooleanLiteral Boolean
@@ -14,7 +26,13 @@ data Pattern = Empty
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int }
              | Choice Pattern Pattern
              | Group Pattern Pattern
+             | Repeat Pattern RepeatCount
              | ArrayPattern (List Pattern)
+
+group :: Pattern -> Pattern -> Pattern
+group Empty p2 = p2
+group p1 Empty = p1
+group p1 p2    = Group p1 p2
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
@@ -33,6 +51,8 @@ instance showPattern :: Show Pattern where
       flatten Nil = Nil
       flatten (Cons (Group g1 g2) xs) = concat $ (flatten (g1 : g2 : Nil)) : (flatten xs) : Nil
       flatten (Cons x xs) = x : flatten xs
+  show (Repeat ch@(Choice _ _) count) = "(" <> show ch <> ")" <> show count
+  show (Repeat p count)               = show p <> show count
 
 showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
 showProps xs =
@@ -49,8 +69,3 @@ derive instance genericPattern :: Generic Pattern
 
 instance eqPattern :: Eq Pattern where
   eq = gEq
-
-group :: Pattern -> Pattern -> Pattern
-group Empty p2 = p2
-group p1 Empty = p1
-group p1 p2    = Group p1 p2
