@@ -15,7 +15,7 @@ import Data.Lazy (Lazy, defer, force)
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
 import Data.String (fromCharArray, singleton)
-import JsonBlueprint.Pattern (Pattern(..))
+import JsonBlueprint.Pattern (group, Pattern(..))
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -112,6 +112,7 @@ booleanDataType = S.string "Boolean" <#> (\_ -> BooleanDataType)
 
 booleanLiteral :: Parser Char Pattern
 booleanLiteral = (const (BooleanLiteral true)  <$> S.string "true")
+
              <|> (const (BooleanLiteral false) <$> S.string "false")
 
 stringLiteral :: Parser Char Pattern
@@ -130,14 +131,50 @@ stringDataType = do
     prop "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
   pure $ StringDataType ps
 
+withChoice :: Parser Char Pattern -> Parser Char Pattern
+withChoice contentP = do
+    first <- contentP
+    S.spaces
+    (parseChoice first) <|> pure first
+  where
+    parseChoice :: Pattern -> Parser Char Pattern
+    parseChoice first = do
+      C.char '|'
+      cut do
+        S.spaces
+        second <- lazyParser (defer \u -> withChoice contentP)
+        pure $ Choice first second
+
+groupParser :: Parser Char Pattern -> Parser Char Pattern
+groupParser itemParser = do
+  C.char '('
+  cut do
+    S.spaces
+    items <- sepBy commaSeparator itemParser
+    S.spaces
+    C.char ')'
+    pure $ foldl group Empty items
+
 arrayPattern :: Parser Char Pattern
 arrayPattern = do
-  C.char '['
-  S.spaces
-  vs <- sepBy commaSeparator valuePattern
-  S.spaces
-  C.char ']'
-  pure $ ArrayPattern (fromFoldable vs)
+    C.char '['
+    cut do
+      S.spaces
+      vs <- sepBy commaSeparator arrayContent
+      S.spaces
+      C.char ']'
+      pure $ ArrayPattern vs
+  where
+    arrayGroup :: Parser Char Pattern
+    arrayGroup = lazyParser (defer \u -> groupParser arrayContent)
+
+    nonChoiceArrayContent :: Parser Char Pattern
+    nonChoiceArrayContent =
+      lazyParser (defer \u -> nonChoiceValuePattern) <|>
+      lazyParser (defer \u -> arrayGroup)
+
+    arrayContent :: Parser Char Pattern
+    arrayContent = withChoice $ lazyParser (defer \u -> nonChoiceArrayContent)
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
@@ -148,15 +185,4 @@ nonChoiceValuePattern =
   lazyParser (defer \u -> arrayPattern)
 
 valuePattern :: Parser Char Pattern
-valuePattern = do
-    vp <- nonChoiceValuePattern
-    S.spaces
-    (parseChoice vp) <|> pure vp
-  where
-    parseChoice :: Pattern -> Parser Char Pattern
-    parseChoice first = do
-      C.char '|'
-      cut do
-        S.spaces
-        second <- valuePattern
-        pure $ Choice first second
+valuePattern = withChoice nonChoiceValuePattern

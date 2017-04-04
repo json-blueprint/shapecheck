@@ -3,6 +3,7 @@ module JsonBlueprint.Pattern where
 import Prelude
 import Data.Array (catMaybes, intercalate)
 import Data.Generic (class Generic, gEq)
+import Data.List (concat, List(..), (:))
 import Data.Maybe (Maybe)
 import JsonBlueprint.Pattern (Pattern(..))
 
@@ -12,7 +13,8 @@ data Pattern = Empty
              | StringLiteral String
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int }
              | Choice Pattern Pattern
-             | ArrayPattern (Array Pattern)
+             | Group Pattern Pattern
+             | ArrayPattern (List Pattern)
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
@@ -25,6 +27,12 @@ instance showPattern :: Show Pattern where
     ]
   show (Choice p1 p2)       = (show p1) <> " | " <> (show p2)
   show (ArrayPattern ps)    = "[" <> intercalate ", " (show <$> ps) <> "]"
+  show (Group p1 p2)        = "(" <> intercalate ", " (show <$> (flatten $ p1 : p2 : Nil)) <> ")"
+    where
+      flatten :: List Pattern -> List Pattern
+      flatten Nil = Nil
+      flatten (Cons (Group g1 g2) xs) = concat $ (flatten (g1 : g2 : Nil)) : (flatten xs) : Nil
+      flatten (Cons x xs) = x : flatten xs
 
 showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
 showProps xs =
@@ -37,10 +45,12 @@ showProps xs =
 prop :: forall a. String -> Maybe a -> Maybe { name :: String, value :: a }
 prop n optV = { name: n, value: _ } <$> optV
 
--- or :: Pattern -> Pattern -> Pattern
--- or = Choice
-
 derive instance genericPattern :: Generic Pattern
 
 instance eqPattern :: Eq Pattern where
   eq = gEq
+
+group :: Pattern -> Pattern -> Pattern
+group Empty p2 = p2
+group p1 Empty = p1
+group p1 p2    = Group p1 p2
