@@ -12,7 +12,7 @@ import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, sat, sepB
 import Data.Foldable (class Foldable, foldl)
 import Data.Int (fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
-import Data.List ((:))
+import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
 import Data.String (fromCharArray, singleton)
@@ -88,6 +88,16 @@ commaSeparator = do
   S.spaces
   pure unit
 
+commaSeparated :: forall i o. Char -> Parser Char i -> Char -> (List i -> o) -> Parser Char o
+commaSeparated open itemParser close transform = do
+  C.char open
+  cut do
+    S.spaces
+    is <- sepBy commaSeparator itemParser
+    S.spaces
+    C.char close
+    pure $ transform is
+
 -- TODO: improve error reporting for misspelled property names
 dtProps :: forall d. d -> Array (Parser Char (d -> d)) -> Parser Char d
 dtProps a b = (propList a b) <|> pure a
@@ -95,14 +105,7 @@ dtProps a b = (propList a b) <|> pure a
     propList :: d -> Array (Parser Char (d -> d)) -> Parser Char d
     propList dt propParsers = do
       S.spaces
-      C.char '('
-      cut do
-        S.spaces
-        ps <- sepBy commaSeparator (reduce propParsers)
-        S.spaces
-        C.char ')'
-        S.spaces
-        pure $ foldl (#) dt ps
+      commaSeparated '(' (reduce propParsers) ')' (foldl (#) dt)
 
     reduce :: Array (Parser Char (d -> d)) -> Parser Char (d -> d)
     reduce [] = pure id
@@ -132,14 +135,7 @@ stringDataType = do
   pure $ StringDataType ps
 
 groupParser :: Parser Char Pattern -> Parser Char Pattern
-groupParser itemParser = do
-  C.char '('
-  cut do
-    S.spaces
-    items <- sepBy commaSeparator itemParser
-    S.spaces
-    C.char ')'
-    pure $ foldl group Empty items
+groupParser itemParser = commaSeparated '(' itemParser ')' (foldl group Empty)
 
 withChoice :: Parser Char Pattern -> Parser Char Pattern
 withChoice contentP = do
@@ -194,25 +190,17 @@ repeatCount =
         pure $ RepeatCount { min, max }
 
 arrayPattern :: Parser Char Pattern
-arrayPattern = do
-    C.char '['
-    cut do
-      S.spaces
-      vs <- sepBy commaSeparator arrayContent
-      S.spaces
-      C.char ']'
-      pure $ ArrayPattern vs
-  where
-    arrayGroup :: Parser Char Pattern
-    arrayGroup = lazyParser (defer \_ -> groupParser arrayContent)
+arrayPattern = commaSeparated '[' arrayContent ']' ArrayPattern  where
+  arrayGroup :: Parser Char Pattern
+  arrayGroup = lazyParser (defer \_ -> groupParser arrayContent)
 
-    nonChoiceArrayContent :: Parser Char Pattern
-    nonChoiceArrayContent =
-      lazyParser (defer \_ -> nonChoiceValuePattern) <|>
-      lazyParser (defer \_ -> arrayGroup)
+  nonChoiceArrayContent :: Parser Char Pattern
+  nonChoiceArrayContent =
+    lazyParser (defer \_ -> nonChoiceValuePattern) <|>
+    lazyParser (defer \_ -> arrayGroup)
 
-    arrayContent :: Parser Char Pattern
-    arrayContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceArrayContent)
+  arrayContent :: Parser Char Pattern
+  arrayContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceArrayContent)
 
 property :: Parser Char Pattern
 property = do
@@ -239,25 +227,17 @@ property = do
     propName = simplePropName <|> quotedPropName
 
 object :: Parser Char Pattern
-object = do
-    C.char '{'
-    cut do
-      S.spaces
-      ps <- sepBy commaSeparator objectContent
-      S.spaces
-      C.char '}'
-      pure $ Object ps
-  where
-    objectGroup :: Parser Char Pattern
-    objectGroup = lazyParser (defer \_ -> groupParser objectContent)
+object = commaSeparated '{' objectContent '}' Object where
+  objectGroup :: Parser Char Pattern
+  objectGroup = lazyParser (defer \_ -> groupParser objectContent)
 
-    nonChoiceObjectContent :: Parser Char Pattern
-    nonChoiceObjectContent =
-      lazyParser (defer \_ -> property) <|>
-      lazyParser (defer \_ -> objectGroup)
+  nonChoiceObjectContent :: Parser Char Pattern
+  nonChoiceObjectContent =
+    lazyParser (defer \_ -> property) <|>
+    lazyParser (defer \_ -> objectGroup)
 
-    objectContent :: Parser Char Pattern
-    objectContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
+  objectContent :: Parser Char Pattern
+  objectContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
