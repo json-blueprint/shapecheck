@@ -65,10 +65,12 @@ instance showPropertyNamePattern :: Show PropertyNamePattern where
 derive instance genericPropertyNamePattern :: Generic PropertyNamePattern
 
 data Pattern = Empty
+             | Null
              | BooleanLiteral Boolean
              | BooleanDataType
              | StringLiteral String
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
+             | NumberLiteral Number
              | Choice Pattern Pattern
              | Group Pattern Pattern
              | Repeat Pattern RepeatCount
@@ -83,9 +85,11 @@ group p1 p2    = Group p1 p2
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
-  show (BooleanLiteral b)   = show b
-  show BooleanDataType      = "Boolean"
-  show (StringLiteral str)  = show str
+  show Null  = "null"
+  show (BooleanLiteral b)  = show b
+  show BooleanDataType     = "Boolean"
+  show (StringLiteral str) = show str
+  show (NumberLiteral num) = show num
 
   show (StringDataType { minLength: Nothing, maxLength: Nothing, pattern: Just (GenRegex re) }) = show re
   show (StringDataType { minLength, maxLength, pattern }) = "String" <> showProps [

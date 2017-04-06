@@ -1,9 +1,11 @@
 module JsonBlueprint.Parser where
 
 import Prelude
+import Data.Argonaut.Core as Json
 import Data.Eulalie.Char as C
 import Data.Eulalie.String as S
 import Control.Alt ((<|>))
+import Data.Argonaut.Parser (jsonParser)
 import Data.Array (fromFoldable)
 import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode, toLower)
@@ -11,11 +13,11 @@ import Data.Char.Unicode (isHexDigit)
 import Data.Either (Either(..))
 import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy)
 import Data.Foldable (class Foldable, foldl)
-import Data.Int (fromString, fromStringAs, hexadecimal)
+import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
 import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
@@ -63,14 +65,50 @@ unicodeEscape = do
 zeroP :: Parser Char Int
 zeroP = const 0 <$> C.char '0'
 
+nonZeroDigit :: Parser Char Char
+nonZeroDigit = sat $ \c -> c >= '1' && c <= '9'
+
 nonNegativeInt :: Parser Char Int
 nonNegativeInt = expected nonNegativeInt' "non-negative integer" where
   nonNegativeInt' = zeroP <|> do
-    first <- C.oneOf "123456789"
+    first <- nonZeroDigit
     rest <- C.many C.digit
     case fromString (singleton first <> rest) of
       Just n -> pure n
       Nothing -> fail
+
+number :: Parser Char Number
+number = do
+    sign <- maybe $ S.string "-"
+    intPart <- show <$> nonNegativeInt
+    cut do
+      theRest <- maybe (exp <|> fraction)
+      case jsonParser (sign <> intPart <> theRest) of
+        Left err -> expected fail err
+        Right json -> pure $ unsafePartial $ fromJust $ Json.toNumber json
+  where
+    exp :: Parser Char String
+    exp = do
+      e <- S.oneOf ["e", "E"]
+      cut do
+        sign <- maybe $ S.string "-"
+        ds <- C.many1 C.digit
+        pure $ e <> sign <> ds
+
+    fraction ::  Parser Char String
+    fraction = do
+      C.char '.'
+      cut do
+        ds <- C.many1 C.digit
+        e <- maybe exp
+        pure $ "." <> ds <> e
+
+integer :: Parser Char Int
+integer = do
+  num <- number
+  case fromNumber num of
+    Just i -> pure i
+    Nothing -> expected fail (show num <> " is not an integer")
 
 dtProp :: forall v d. String -> Parser Char v -> (v -> d -> d) -> Parser Char (d -> d)
 dtProp name valP f = do
@@ -134,6 +172,9 @@ stringLiteral' = do
     cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
     expected (C.char '"') "unterminated string literal"
     pure $ charList2String cs
+
+numberLiteral :: Parser Char Pattern
+numberLiteral = NumberLiteral <$> number
 
 regexLiteral :: Parser Char GenRegex
 regexLiteral = do
@@ -278,14 +319,19 @@ object = commaSeparated '{' objectContent '}' Object where
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
+    null <|>
     booleanLiteral <|>
     booleanDataType <|>
     stringLiteral <|>
     stringDataType <|>
+    numberLiteral <|>
     regexStringShorthand <|>
     lazyParser (defer \_ -> arrayPattern) <|>
     lazyParser (defer \_ -> object)
   where
+    null :: Parser Char Pattern
+    null = const Null <$> S.string "null"
+
     -- allows using literal pattenr (f.ex. /[a-z]/i) instead of full String(pattern = /[a-z]/i)
     regexStringShorthand :: Parser Char Pattern
     regexStringShorthand = (\re -> StringDataType emptyStringDtProps { pattern = Just re }) <$> regexLiteral
