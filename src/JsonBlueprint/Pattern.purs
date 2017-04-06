@@ -3,10 +3,11 @@ module JsonBlueprint.Pattern where
 import Prelude
 import Data.String as Str
 import Data.Array (catMaybes, intercalate)
-import Data.Generic (class Generic, gEq)
+import Data.Either (Either(..))
+import Data.Generic (class Generic, GenericSignature(..), GenericSpine(..), gEq)
 import Data.List (concat, List(..), (:))
 import Data.Maybe (Maybe(..))
-import Data.String.Regex (Regex, test)
+import Data.String.Regex (Regex, flags, parseFlags, renderFlags, regex, source, test)
 import Data.String.Regex.Flags (ignoreCase)
 import Data.String.Regex.Unsafe (unsafeRegex)
 import JsonBlueprint.Pattern (Pattern(..))
@@ -23,8 +24,32 @@ instance showRepeatCount :: Show RepeatCount where
 
 derive instance genericRepeatCount :: Generic RepeatCount
 
+newtype GenRegex = GenRegex Regex
+
+instance showGenRegex :: Show GenRegex where
+  show (GenRegex r) = show r
+
+instance genericRegex :: Generic GenRegex where
+  toSignature proxy = SigProd "Data.String.Regex" [ { sigConstructor: "Data.String.Regex", sigValues: [ \_ -> SigString, \_ -> SigString ] } ]
+
+  toSpine (GenRegex r) = SProd "Data.String.Regex" [
+    \_ -> SString (source r),
+    \_ -> SString (renderFlags $ flags r)]
+
+  fromSpine (SProd "Data.String.Regex" [getPattern, getFlags]) = do
+    p <- spine2String getPattern
+    fs <- spine2String getFlags
+    GenRegex <$> case regex p (parseFlags fs) of
+      Right r -> Just r
+      Left _  -> Nothing
+    where
+      spine2String lazySpine = case lazySpine unit of
+        SString str -> Just str
+        _           -> Nothing
+  fromSpine _ = Nothing
+
 data PropertyNamePattern = LiteralName String
-                         | WildcardName { minLength :: Maybe Int, maxLength :: Maybe Int }
+                         | WildcardName { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
 
 simplePropName :: Regex
 simplePropName = unsafeRegex "^[a-z_][a-z\\d_]*$" ignoreCase
@@ -43,7 +68,7 @@ data Pattern = Empty
              | BooleanLiteral Boolean
              | BooleanDataType
              | StringLiteral String
-             | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int }
+             | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
              | Choice Pattern Pattern
              | Group Pattern Pattern
              | Repeat Pattern RepeatCount
@@ -61,25 +86,28 @@ instance showPattern :: Show Pattern where
   show (BooleanLiteral b)   = show b
   show BooleanDataType      = "Boolean"
   show (StringLiteral str)  = show str
-  show (StringDataType { minLength, maxLength }) = "String" <> showProps [
+
+  show (StringDataType { minLength: Nothing, maxLength: Nothing, pattern: Just (GenRegex re) }) = show re
+  show (StringDataType { minLength, maxLength, pattern }) = "String" <> showProps [
       prop "minLength" minLength,
-      prop "maxLength" maxLength
-    ]
-  show (Choice p1 p2)       = showTerm p1 <> " | " <> showTerm p2
+      prop "maxLength" maxLength,
+      prop "pattern"   pattern]
+
+  show (Choice p1 p2) = showTerm p1 <> " | " <> showTerm p2
     where
       showTerm :: Pattern -> String
       showTerm p@(Property _) = "(" <> show p <> ")"
       showTerm p              = show p
-  show (ArrayPattern ps)    = "[" <> intercalate ", " (show <$> ps) <> "]"
+  show (ArrayPattern ps) = "[" <> intercalate ", " (show <$> ps) <> "]"
 
-  show (Group p1 p2)        = "(" <> intercalate ", " (show <$> (flatten $ p1 : p2 : Nil)) <> ")"
+  show (Group p1 p2) = "(" <> intercalate ", " (show <$> (flatten $ p1 : p2 : Nil)) <> ")"
     where
       flatten :: List Pattern -> List Pattern
       flatten Nil = Nil
       flatten (Cons (Group g1 g2) xs) = concat $ (flatten (g1 : g2 : Nil)) : (flatten xs) : Nil
       flatten (Cons x xs) = x : flatten xs
 
-  show (Repeat p count)               = showRepeated p <> show count
+  show (Repeat p count) = showRepeated p <> show count
     where
       showRepeated :: Pattern -> String
       showRepeated (Property _) = "(" <> show p <> ")"
@@ -92,16 +120,16 @@ instance showPattern :: Show Pattern where
     indent :: String -> String
     indent = Str.replaceAll (Str.Pattern "\n") (Str.Replacement "\n  ")
 
-showProps :: forall a. Show a => Array (Maybe { name :: String, value :: a }) -> String
+showProps :: Array (Maybe { name :: String, value :: String }) -> String
 showProps xs =
   case printedProps of
     [] -> ""
     ps -> "(" <> intercalate ", " ps <> ")"
   where
-    printedProps = (\p -> p.name <> " = " <> show p.value) <$> catMaybes xs
+    printedProps = (\p -> p.name <> " = " <> p.value) <$> catMaybes xs
 
-prop :: forall a. String -> Maybe a -> Maybe { name :: String, value :: a }
-prop n optV = { name: n, value: _ } <$> optV
+prop :: forall a. Show a => String -> Maybe a -> Maybe { name :: String, value :: String }
+prop n optV = { name: n, value: _ } <<< show <$> optV
 
 derive instance genericPattern :: Generic Pattern
 

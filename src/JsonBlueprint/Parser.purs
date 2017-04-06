@@ -8,7 +8,8 @@ import Data.Array (fromFoldable)
 import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode, toLower)
 import Data.Char.Unicode (isHexDigit)
-import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, sat, sepBy)
+import Data.Either (Either(..))
+import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy)
 import Data.Foldable (class Foldable, foldl)
 import Data.Int (fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
@@ -16,7 +17,9 @@ import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..))
 import Data.String (fromCharArray, singleton)
-import JsonBlueprint.Pattern (Pattern(..), PropertyNamePattern(..), RepeatCount(..), group)
+import Data.String.Regex (regex)
+import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
+import JsonBlueprint.Pattern (GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group)
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -118,21 +121,56 @@ booleanLiteral :: Parser Char Pattern
 booleanLiteral = (const (BooleanLiteral true)  <$> S.string "true")
              <|> (const (BooleanLiteral false) <$> S.string "false")
 
+charList2String :: List Char -> String
+charList2String = fromCharArray <<< fromFoldable
+
 stringLiteral :: Parser Char Pattern
-stringLiteral = do
+stringLiteral = StringLiteral <$> stringLiteral'
+
+stringLiteral' :: Parser Char String
+stringLiteral' = do
   expected (C.char '"') "string literal"
   cut do
     cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
     expected (C.char '"') "unterminated string literal"
-    pure $ StringLiteral $ fromFoldable >>> fromCharArray $ cs
+    pure $ charList2String cs
+
+regexLiteral :: Parser Char GenRegex
+regexLiteral = do
+    C.char '/'
+    cut do
+      cs <- many $ escapedSlash <|> C.notChar '/'
+      C.char '/'
+      fs <- maybe $ const ignoreCase <$> C.char 'i'
+      makeRegex (charList2String cs) fs
+  where
+    escapedSlash :: Parser Char Char
+    escapedSlash = const '/' <$> S.string "\\/"
+
+makeRegex :: String -> RegexFlags -> Parser Char GenRegex
+makeRegex pattern flags = case regex pattern flags of
+  Right re  -> pure $ GenRegex re
+  Left err -> expected fail err
+
+emptyStringDtProps :: { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
+emptyStringDtProps =  { minLength: Nothing, maxLength: Nothing, pattern: Nothing }
 
 stringDataType :: Parser Char Pattern
 stringDataType = do
-  S.string "String"
-  ps <- dtProps { minLength: Nothing, maxLength: Nothing } [
-    dtProp "minLength" nonNegativeInt (\i ps -> ps { minLength = Just i }),
-    dtProp "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i })]
-  pure $ StringDataType ps
+    S.string "String"
+    ps <- dtProps emptyStringDtProps [
+      dtProp "minLength" nonNegativeInt (\i ps -> ps { minLength = Just i }),
+      dtProp "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i }),
+      dtProp "pattern"   regexProp      (\r ps -> ps { pattern = Just r })]
+    pure $ StringDataType ps
+  where
+    regexFromStringPattern :: Parser Char GenRegex
+    regexFromStringPattern = do
+      pattern <- stringLiteral'
+      makeRegex pattern noFlags
+
+    regexProp :: Parser Char GenRegex
+    regexProp = regexFromStringPattern <|> regexLiteral
 
 groupParser :: Parser Char Pattern -> Parser Char Pattern
 groupParser itemParser = commaSeparated '(' itemParser ')' (foldl group Empty)
@@ -220,8 +258,7 @@ property = do
         pure $ LiteralName (fromCharArray <<< fromFoldable $ c : cs)
 
     quotedPropName :: Parser Char PropertyNamePattern
-    quotedPropName = stringLiteral <#> unsafePartial \l -> case l of
-      StringLiteral value -> LiteralName value
+    quotedPropName = LiteralName <$> stringLiteral'
 
     propName :: Parser Char PropertyNamePattern
     propName = simplePropName <|> quotedPropName
@@ -241,12 +278,17 @@ object = commaSeparated '{' objectContent '}' Object where
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
-  booleanLiteral <|>
-  booleanDataType <|>
-  stringLiteral <|>
-  stringDataType <|>
-  lazyParser (defer \_ -> arrayPattern) <|>
-  lazyParser (defer \_ -> object)
+    booleanLiteral <|>
+    booleanDataType <|>
+    stringLiteral <|>
+    stringDataType <|>
+    regexStringShorthand <|>
+    lazyParser (defer \_ -> arrayPattern) <|>
+    lazyParser (defer \_ -> object)
+  where
+    -- allows using literal pattenr (f.ex. /[a-z]/i) instead of full String(pattern = /[a-z]/i)
+    regexStringShorthand :: Parser Char Pattern
+    regexStringShorthand = (\re -> StringDataType emptyStringDtProps { pattern = Just re }) <$> regexLiteral
 
 valuePattern :: Parser Char Pattern
 valuePattern = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
