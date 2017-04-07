@@ -21,7 +21,7 @@ import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
-import JsonBlueprint.Pattern (GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), emptyNumericDtProps, emptyStringDtProps, group)
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -176,6 +176,26 @@ stringLiteral' = do
 numberLiteral :: Parser Char Pattern
 numberLiteral = NumberLiteral <$> number
 
+numericDtProps :: forall n. NumericDtProps n -> Parser Char n -> Parser Char (NumericDtProps n)
+numericDtProps emptyDt numParser = dtProps emptyDt [
+    dtProp "min"          numParser (\i ps -> ps { min = Just (Bound { value: i, inclusive: true }) }),
+    dtProp "minExclusive" numParser (\i ps -> ps { min = Just (Bound { value: i, inclusive: false }) }),
+    dtProp "max"          numParser (\i ps -> ps { max = Just (Bound { value: i, inclusive: true }) }),
+    dtProp "maxExclusive" numParser (\i ps -> ps { max = Just (Bound { value: i, inclusive: false }) }),
+    dtProp "multipleOf"   numParser (\i ps -> ps { multipleOf = Just i })]
+
+intDataType :: Parser Char Pattern
+intDataType = do
+  S.string "Int"
+  ps <- numericDtProps emptyNumericDtProps integer
+  pure $ IntDataType ps
+
+numberDataType :: Parser Char Pattern
+numberDataType = do
+  S.string "Number"
+  ps <- numericDtProps emptyNumericDtProps number
+  pure $ NumberDataType ps
+
 regexLiteral :: Parser Char GenRegex
 regexLiteral = do
     C.char '/'
@@ -192,9 +212,6 @@ makeRegex :: String -> RegexFlags -> Parser Char GenRegex
 makeRegex pattern flags = case regex pattern flags of
   Right re  -> pure $ GenRegex re
   Left err -> expected fail err
-
-emptyStringDtProps :: { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
-emptyStringDtProps =  { minLength: Nothing, maxLength: Nothing, pattern: Nothing }
 
 stringDataType :: Parser Char Pattern
 stringDataType = do
@@ -325,6 +342,8 @@ nonChoiceValuePattern =
     stringLiteral <|>
     stringDataType <|>
     numberLiteral <|>
+    intDataType <|>
+    numberDataType <|>
     regexStringShorthand <|>
     lazyParser (defer \_ -> arrayPattern) <|>
     lazyParser (defer \_ -> object)

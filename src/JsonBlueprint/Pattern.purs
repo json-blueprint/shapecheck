@@ -12,9 +12,13 @@ import Data.String.Regex.Flags (ignoreCase)
 import Data.String.Regex.Unsafe (unsafeRegex)
 import JsonBlueprint.Pattern (Pattern(..))
 
+-- | Represents suffix that can be added to a pattern that can either be repeated
+-- | or which is optional. Standard patterns without explicit repetition count are
+-- | equivalent to "exactly once" ({1}) repetition
 newtype RepeatCount = RepeatCount { min :: Int, max :: Maybe Int }
 
 instance showRepeatCount :: Show RepeatCount where
+  show (RepeatCount { min: 1, max: Just 1 }) = ""
   show (RepeatCount { min: 0, max: Just 1 })  = "?"
   show (RepeatCount { min: 0, max: Nothing }) = "*"
   show (RepeatCount { min: 1, max: Nothing }) = "+"
@@ -24,6 +28,8 @@ instance showRepeatCount :: Show RepeatCount where
 
 derive instance genericRepeatCount :: Generic RepeatCount
 
+-- | Library Regex doesn't have Generic instance derived and so it can't be used directly
+-- | in an ADT which itself derives Generic
 newtype GenRegex = GenRegex Regex
 
 instance showGenRegex :: Show GenRegex where
@@ -48,6 +54,15 @@ instance genericRegex :: Generic GenRegex where
         _           -> Nothing
   fromSpine _ = Nothing
 
+-- | A numeric bound (minimum or maximum) indicating if it's inclusive or exclusive
+newtype Bound a = Bound { value :: a, inclusive :: Boolean }
+
+instance showBound :: Show { value :: a, inclusive :: Boolean } => Show (Bound a) where
+  show (Bound props) = show props
+
+derive instance genericBound :: Generic a => Generic (Bound a)
+
+-- | Pattern for property names. This is equivalent to standard String patterns
 data PropertyNamePattern = LiteralName String
                          | WildcardName { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
 
@@ -71,12 +86,28 @@ data Pattern = Empty
              | StringLiteral String
              | StringDataType { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
              | NumberLiteral Number
+             | IntDataType { min :: Maybe (Bound Int), max :: Maybe (Bound Int), multipleOf :: Maybe Int }
+             | NumberDataType { min :: Maybe (Bound Number), max :: Maybe (Bound Number), multipleOf :: Maybe Number }
              | Choice Pattern Pattern
              | Group Pattern Pattern
              | Repeat Pattern RepeatCount
              | ArrayPattern (List Pattern)
              | Property { name :: PropertyNamePattern, value :: Pattern }
              | Object (List Pattern)
+
+type StringDtProps = { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
+emptyStringDtProps :: StringDtProps
+emptyStringDtProps = { minLength: Nothing, maxLength: Nothing, pattern: Nothing }
+
+type NumericDtProps a = { min :: Maybe (Bound a), max :: Maybe (Bound a), multipleOf :: Maybe a }
+emptyNumericDtProps :: forall a. NumericDtProps a
+emptyNumericDtProps = { min: Nothing, max: Nothing, multipleOf: Nothing }
+
+showNumericDtProps :: forall a. Show a => NumericDtProps a -> String
+showNumericDtProps { min, max, multipleOf } = showProps [
+  boundProp "min"        min,
+  boundProp "max"        max,
+  prop      "multipleOf" multipleOf]
 
 group :: Pattern -> Pattern -> Pattern
 group Empty p2 = p2
@@ -90,18 +121,21 @@ instance showPattern :: Show Pattern where
   show BooleanDataType     = "Boolean"
   show (StringLiteral str) = show str
   show (NumberLiteral num) = show num
+  show (IntDataType ps)    = "Int" <> showNumericDtProps ps
+  show (NumberDataType ps) = "Number" <> showNumericDtProps ps
 
   show (StringDataType { minLength: Nothing, maxLength: Nothing, pattern: Just (GenRegex re) }) = show re
   show (StringDataType { minLength, maxLength, pattern }) = "String" <> showProps [
-      prop "minLength" minLength,
-      prop "maxLength" maxLength,
-      prop "pattern"   pattern]
+    prop "minLength" minLength,
+    prop "maxLength" maxLength,
+    prop "pattern"   pattern]
 
   show (Choice p1 p2) = showTerm p1 <> " | " <> showTerm p2
     where
       showTerm :: Pattern -> String
       showTerm p@(Property _) = "(" <> show p <> ")"
       showTerm p              = show p
+
   show (ArrayPattern ps) = "[" <> intercalate ", " (show <$> ps) <> "]"
 
   show (Group p1 p2) = "(" <> intercalate ", " (show <$> (flatten $ p1 : p2 : Nil)) <> ")"
@@ -134,6 +168,14 @@ showProps xs =
 
 prop :: forall a. Show a => String -> Maybe a -> Maybe { name :: String, value :: String }
 prop n optV = { name: n, value: _ } <<< show <$> optV
+
+boundProp :: forall a. Show a => String -> Maybe (Bound a) -> Maybe { name :: String, value :: String }
+boundProp baseName optBound = do
+    bound <- optBound
+    pure $ case bound of
+      Bound { value, inclusive } -> { name: propName inclusive, value: show value }
+  where
+    propName inclusive = baseName <> if inclusive then "" else "Exclusive"
 
 derive instance genericPattern :: Generic Pattern
 
