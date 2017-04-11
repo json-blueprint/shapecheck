@@ -16,11 +16,15 @@
     "purescript-foldable-traversable": "^2.2.0",
     "purescript-quickcheck": "^3.1.1",
     "purescript-generics": "^3.3.0",
-    "purescript-argonaut-core": "^2.0.1"
+    "purescript-argonaut-core": "^2.0.1",
+    "purescript-sequences": "^1.0.2"
   },
   "devDependencies": {
     "purescript-psci-support": "^2.0.0",
-    "purescript-jack": "^1.0.0"
+    "purescript-jack": "^1.0.0",
+    "purescript-test-unit": "^10.1.0",
+    "purescript-node-fs-aff": "^3.0.0",
+    "purescript-markdown": "^9.0.0"
   },
   "resolutions": {
     "purescript-maybe": "^2.1.1",

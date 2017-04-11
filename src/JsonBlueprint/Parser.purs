@@ -4,6 +4,7 @@ import Prelude
 import Data.Argonaut.Core as Json
 import Data.Eulalie.Char as C
 import Data.Eulalie.String as S
+import Data.Sequence as Seq
 import Control.Alt ((<|>))
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array (fromFoldable)
@@ -21,6 +22,7 @@ import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
+import JsonBlueprint.Validator (JsonPath(..), JsonPathNode(..))
 import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), emptyNumericDtProps, emptyStringDtProps, group)
 import Partial.Unsafe (unsafePartial)
 
@@ -298,6 +300,13 @@ arrayPattern = commaSeparated '[' arrayContent ']' ArrayPattern  where
   arrayContent :: Parser Char Pattern
   arrayContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceArrayContent)
 
+simplePropName :: Parser Char String
+simplePropName = do
+  c <- sat \c -> c == '_' || ((toLower c) >= 'a' && (toLower c) <= 'z')
+  cut do
+    cs <- many C.letter
+    pure $ fromCharArray <<< fromFoldable $ c : cs
+
 property :: Parser Char Pattern
 property = do
     name <- propName
@@ -308,18 +317,11 @@ property = do
       value <- valuePattern
       pure $ Property { name, value }
   where
-    simplePropName :: Parser Char PropertyNamePattern
-    simplePropName = do
-      c <- sat \c -> c == '_' || ((toLower c) >= 'a' && (toLower c) <= 'z')
-      cut do
-        cs <- many C.letter
-        pure $ LiteralName (fromCharArray <<< fromFoldable $ c : cs)
-
     quotedPropName :: Parser Char PropertyNamePattern
     quotedPropName = LiteralName <$> stringLiteral'
 
     propName :: Parser Char PropertyNamePattern
-    propName = simplePropName <|> quotedPropName
+    propName = (LiteralName <$> simplePropName) <|> quotedPropName
 
 object :: Parser Char Pattern
 object = commaSeparated '{' objectContent '}' Object where
@@ -357,3 +359,23 @@ nonChoiceValuePattern =
 
 valuePattern :: Parser Char Pattern
 valuePattern = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
+
+jsonPathParser :: Parser Char JsonPath
+jsonPathParser = do
+    C.char '.'
+    ns <- sepBy (C.char '.') $ idxNode <|> (KeyNode <$> simplePropName) <|> keyNode
+    pure $ JsonPath $ Seq.fromFoldable ns
+  where
+    idxNode :: Parser Char JsonPathNode
+    idxNode = do
+      C.char '['
+      idx <- nonNegativeInt
+      C.char ']'
+      pure $ IdxNode idx
+
+    keyNode :: Parser Char JsonPathNode
+    keyNode = do
+      C.char '['
+      key <- stringLiteral'
+      C.char ']'
+      pure $ KeyNode key
