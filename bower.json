@@ -17,7 +17,8 @@
     "purescript-quickcheck": "^3.1.1",
     "purescript-generics": "^3.3.0",
     "purescript-argonaut-core": "^2.0.1",
-    "purescript-sequences": "^1.0.2"
+    "purescript-sequences": "^1.0.2",
+    "purescript-validation": "^2.0.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^2.0.0",

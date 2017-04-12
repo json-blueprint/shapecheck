@@ -26,8 +26,7 @@
 ```json
 420.0
 ```
-+ Invalid
-    - `.`
++ Valid
 
 ## invalid type (boolean)
 ```json

@@ -27,10 +27,3 @@
 ```
 + Invalid
     - `.`
-
-## decimal with the same numeric value
-```json
-4200.0
-```
-+ Invalid
-    - `.`

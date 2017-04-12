@@ -16,6 +16,7 @@ import Data.Foldable (elem, foldl, intercalate)
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
+import Data.Validation.Semigroup (unV)
 import JsonBlueprint.Pattern (Pattern)
 import JsonBlueprint.Validator (Error, JsonPath, validate)
 import Node.Encoding (Encoding(..))
@@ -37,7 +38,7 @@ main :: forall e. Eff (err :: EXCEPTION, console :: CONSOLE, testOutput :: TESTO
                         (Canceler (console :: CONSOLE, testOutput :: TESTOUTPUT, avar :: AVAR, fs :: F.FS | e))
 main = launchAff do
   -- specs <- loadSpecs "./specs"
-  specs <- loadSpecs "./specs/scalar/boolean/boolean-datatype.md"
+  specs <- loadSpecs "./specs/scalar"
   liftEff' $ runTest do
     specs
 
@@ -77,10 +78,10 @@ loadSpecs path =
         if doc.expectedErrors == actualErrorPaths then
           success
         else
-          failure ("failed spec:\n" <> intercalate "\n" problems)
+          failure ("incorrect validation of sample document '" <> doc.name <> "':\n" <> intercalate "\n" problems)
       where
         actualErrors :: Seq.Seq Error
-        actualErrors = validate doc.json pattern
+        actualErrors = unV id (const Seq.empty) $ validate doc.json pattern
 
         actualErrorPaths :: Seq.Seq JsonPath
         actualErrorPaths = (\err -> err.path) <$> actualErrors

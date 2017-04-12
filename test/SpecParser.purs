@@ -10,7 +10,7 @@ import Data.Eulalie.Stream (stream, Stream)
 import Data.Foldable (foldMap, foldl, intercalate)
 import Data.List (List, (:))
 import Data.Maybe (Maybe(..), maybe)
-import Data.Sequence (Seq, cons, empty, null, snoc, uncons)
+import Data.Sequence (Seq, empty, null, snoc, unsnoc)
 import Data.String (toCharArray)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
@@ -52,22 +52,22 @@ doParse parserDesc parser inputStr =
 
 parseBlock :: Either String Spec' -> Block String -> Either String Spec'
 parseBlock (Right s) (Header 1 is) = Right $ s { name = Just (renderText is) }
-parseBlock (Right s) (Header 2 is) = Right $ s { docs = cons doc s.docs } where
+parseBlock (Right s) (Header 2 is) = Right $ s { docs = snoc s.docs doc } where
   doc :: SampleDoc'
   doc = { name: renderText is, json: Nothing, expectedErrors: empty }
 parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p }) <$> doParse "pattern" valuePattern (intercalate "\n" ls)
 parseBlock (Right s) (CodeBlock (Fenced _ "json") ls) = do
   json <- jsonParser $ intercalate "\n" ls
-  case uncons s.docs of
-    Just (Tuple head tail) -> Right $ s { docs = snoc tail (head { json = Just json }) }
+  case unsnoc s.docs of
+    Just (Tuple docs doc) -> Right $ s { docs = snoc docs (doc { json = Just json }) }
     Nothing -> Left "found sample document (fenced `json` code block) with no name (preceding 2nd-level heading)"
 parseBlock (Right s) (Lst _ ((b : bs) : _)) = case b of
     Paragraph is -> case renderText is of
       "Valid" -> Right s
       "Invalid" ->
-        case uncons s.docs of
-          Just (Tuple doc docs) ->
-            (\ee -> s { docs = cons (doc { expectedErrors = ee }) docs }) <$> parseExpectedErrors bs
+        case unsnoc s.docs of
+          Just (Tuple docs doc) ->
+            (\ee -> s { docs = snoc docs (doc { expectedErrors = ee }) }) <$> parseExpectedErrors bs
           Nothing -> Left "found validation outcome spec with no preceding document name header (2nd-level heading)"
       other -> Left $ unexpectedShape <> " '" <> other <> "'"
     other -> Left $ unexpectedShape <> " " <> show other
