@@ -1,16 +1,18 @@
 module JsonBlueprint.Validator where
 
 import Prelude
+import Data.Int as Int
 import Data.String as Str
 import Data.String.Regex as Regex
-import Data.Argonaut.Core (Json, foldJson, foldJsonBoolean, foldJsonNumber, foldJsonString)
+import Data.Argonaut.Core (Json, foldJson, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonString)
 import Data.Either (Either(..), fromRight)
 import Data.Foldable (intercalate)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (class Monoid, mempty)
 import Data.Sequence (Seq, snoc)
-import Data.Validation.Semigroup (invalid, V, unV)
-import JsonBlueprint.Pattern (GenRegex(..), Pattern(..), propNameRequiresQuoting, RepeatCount(..))
+import Data.Validation.Semigroup (V, invalid, unV)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), propNameRequiresQuoting)
+import Math (remainder)
 import Partial.Unsafe (unsafePartial)
 
 -- | simple jq-like path pointing to a locaiton in a JSON document
@@ -67,6 +69,8 @@ validate = validateValue mempty
 
 validateValue :: JsonPath -> Json -> Pattern -> ValidationResult
 validateValue path json pattern = case pattern of
+    Null -> fromEither $ expectX "null" foldJsonNull json
+
     BooleanDataType -> fromEither $ expectBoolean json
 
     (BooleanLiteral bool) -> validateLiteral bool (expectBoolean json)
@@ -80,6 +84,17 @@ validateValue path json pattern = case pattern of
       toEither $ check (\min -> { ok: Str.length actual >= min, errMsg: "String is too short. Expected at least " <> show min <> " characters."}) minLength *>
                  check (\max -> { ok: Str.length actual <= max, errMsg: "String is too long. Epected at most " <> show max <> " characters." }) maxLength *>
                  check (\re -> { ok: matches re actual, errMsg: "String doesn't match regular expression: " <> show re }) regex
+
+    (NumberDataType props) -> fromEither do
+      actual <- expectNumber json
+      toEither $ validateNumeric props actual remainder
+
+    (IntDataType props) -> fromEither do
+      num <- expectNumber json
+      case Int.fromNumber num of
+        Just int -> toEither $ validateNumeric props int mod
+        Nothing -> fail "Expected integer but found decimal number"
+
     _ -> pure unit
   where
     fromEither :: forall a. Either Errors a -> ValidationResult
@@ -120,6 +135,28 @@ validateValue path json pattern = case pattern of
       act <- actual
       (if act == expected then pure unit
        else fail $ "Invalid value. Expected " <> show expected)
+
+    checkBound :: forall n. n -> (n -> n -> Boolean) -> (n -> n -> Boolean) -> Maybe (Bound n) -> (n -> Boolean -> String) -> ValidationResult
+    checkBound _ _ _ Nothing _ = pure unit
+    checkBound actual exclOp inclOp (Just (Bound { value, inclusive })) createErrMsg =
+      let
+        effectiveOp = if inclusive then inclOp else exclOp
+      in
+        if actual `effectiveOp` value then pure unit
+        else invalid $ pure $ error $ createErrMsg value inclusive
+
+    validateNumeric :: forall n. Ord n => EuclideanRing n => Show n =>
+                       { min :: Maybe (Bound n), max :: Maybe (Bound n), multipleOf :: Maybe n } -> n -> (n -> n -> n) -> ValidationResult
+    validateNumeric { min, max, multipleOf } actual rem =
+        checkBound actual (>) (>=) min numberTooLowErr *>
+        checkBound actual (<) (<=) max numberTooHighErr *>
+        check (\factor -> { ok: actual `rem` factor == zero, errMsg: "Number is not multiple of " <> show factor }) multipleOf
+      where
+        numberTooLowErr :: n -> Boolean -> String
+        numberTooLowErr m inclusive = "Number is lower than minimal allowed value of " <> show m <> if inclusive then "" else " (exclusive)"
+
+        numberTooHighErr :: n -> Boolean -> String
+        numberTooHighErr m inclusive = "Number exceeds maximal allowed value of " <> show m <> if inclusive then "" else " (exclusive)"
 
     matches :: GenRegex -> String -> Boolean
     matches (GenRegex regex) = Regex.test effRegex where

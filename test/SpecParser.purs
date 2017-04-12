@@ -1,6 +1,7 @@
 module Test.SpecParser where
 
 import Prelude
+import Data.String as Str
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Parser (jsonParser)
 import Data.Either (Either(..))
@@ -8,10 +9,10 @@ import Data.Eulalie.Parser (eof, parse, Parser)
 import Data.Eulalie.Result (ParseResult(..))
 import Data.Eulalie.Stream (stream, Stream)
 import Data.Foldable (foldMap, foldl, intercalate)
-import Data.List (List, (:))
+import Data.List (List(..), (:))
 import Data.Maybe (Maybe(..), maybe)
 import Data.Sequence (Seq, empty, null, snoc, unsnoc)
-import Data.String (toCharArray)
+import Data.String (split, toCharArray)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import JsonBlueprint.Parser (jsonPathParser, valuePattern)
@@ -24,7 +25,7 @@ import Text.Markdown.SlamDown.Traverse (everything)
 type Markdown = String
 
 type Spec = { name :: String, pattern :: Pattern, docs :: Seq SampleDoc }
-type SampleDoc = { name :: String, json :: Json, expectedErrors :: Seq JsonPath }
+type SampleDoc = { name :: String, json :: Json, expectedErrors :: Seq JsonPath, tags :: Array String }
 
 parseSpec :: Markdown -> Either String Spec
 parseSpec mdSource = do
@@ -54,13 +55,21 @@ parseBlock :: Either String Spec' -> Block String -> Either String Spec'
 parseBlock (Right s) (Header 1 is) = Right $ s { name = Just (renderText is) }
 parseBlock (Right s) (Header 2 is) = Right $ s { docs = snoc s.docs doc } where
   doc :: SampleDoc'
-  doc = { name: renderText is, json: Nothing, expectedErrors: empty }
+  doc = { name: renderText is, json: Nothing, expectedErrors: empty, tags: [] }
 parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p }) <$> doParse "pattern" valuePattern (intercalate "\n" ls)
 parseBlock (Right s) (CodeBlock (Fenced _ "json") ls) = do
   json <- jsonParser $ intercalate "\n" ls
   case unsnoc s.docs of
     Just (Tuple docs doc) -> Right $ s { docs = snoc docs (doc { json = Just json }) }
     Nothing -> Left "found sample document (fenced `json` code block) with no name (preceding 2nd-level heading)"
+parseBlock (Right s) (Blockquote ( (Paragraph is) : Nil )) =
+  let
+    tagString = renderText is
+    tags = split (Str.Pattern " ") tagString
+  in
+    case unsnoc s.docs of
+      Just (Tuple docs doc) -> Right $ s { docs = snoc docs (doc { tags = tags }) }
+      Nothing -> Left "found tags for sample document with no name (preceding 2nd-level heading)"
 parseBlock (Right s) (Lst _ ((b : bs) : _)) = case b of
     Paragraph is -> case renderText is of
       "Valid" -> Right s
@@ -105,12 +114,12 @@ renderText' (Link is _) = renderText is
 renderText' _           = ""
 
 type Spec' = { name :: Maybe String, pattern :: Maybe Pattern, docs :: Seq SampleDoc' }
-type SampleDoc' = { name :: String, json :: Maybe Json, expectedErrors :: Seq JsonPath }
+type SampleDoc' = { name :: String, json :: Maybe Json, expectedErrors :: Seq JsonPath, tags :: Array String }
 
 completeDoc :: SampleDoc' -> Either String SampleDoc
-completeDoc { name, json, expectedErrors } = do
+completeDoc { name, json, expectedErrors, tags } = do
   js <- maybe (Left $ "JSON code block not found for sample document '" <> name <> "'") Right json
-  pure $ { name, json: js, expectedErrors }
+  pure $ { name, json: js, expectedErrors, tags }
 
 completeSpec :: Spec' -> Either String Spec
 completeSpec { name, pattern, docs } = do

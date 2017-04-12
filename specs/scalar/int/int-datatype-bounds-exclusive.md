@@ -45,6 +45,7 @@ Int(minExclusive=3, maxExclusive=5)
     - `.`
 
 ## decimal with int value within bounds
+> StrictInt
 ```json
 4.0
 ```

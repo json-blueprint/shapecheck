@@ -10,7 +10,7 @@ import Control.Monad.Aff.AVar (AVAR)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE)
 import Control.Monad.Eff.Exception (EXCEPTION)
-import Data.Array (uncons)
+import Data.Array (intersect, null, uncons)
 import Data.Either (Either(..))
 import Data.Foldable (elem, foldl, intercalate)
 import Data.Maybe (Maybe(..))
@@ -33,6 +33,9 @@ import Test.Unit.Main (runTest)
 --   jackMain [
 --     "Test.PatternProps"
 --   ]
+
+skipSpecsTagged :: Array String
+skipSpecsTagged = ["StrictInt"]
 
 main :: forall e. Eff (err :: EXCEPTION, console :: CONSOLE, testOutput :: TESTOUTPUT, avar :: AVAR, fs :: F.FS | e)
                         (Canceler (console :: CONSOLE, testOutput :: TESTOUTPUT, avar :: AVAR, fs :: F.FS | e))
@@ -66,7 +69,10 @@ loadSpecs path =
     spec2Test testFileName md =
       case parseSpec md of
         Left err -> test testFileName $ Assert.assert err false
-        Right { name, pattern, docs } -> test name $ assertions pattern docs
+        Right { name, pattern, docs } -> test name $ assertions pattern (filterDocs docs)
+
+    filterDocs :: Seq.Seq SampleDoc -> Seq.Seq SampleDoc
+    filterDocs = Seq.filter (\d -> null $ intersect d.tags skipSpecsTagged)
 
     assertions :: forall e. Pattern -> Seq.Seq SampleDoc -> Aff e Unit
     assertions pattern docs = case Seq.uncons $ (assertion pattern) <$> docs of

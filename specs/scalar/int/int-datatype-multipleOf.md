@@ -35,6 +35,7 @@ Int(multipleOf=5)
     - `.`
 
 ## multiple in a decimal form
+> StrictInt
 ```json
 15.0
 ```
