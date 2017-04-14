@@ -1,4 +1,11 @@
-module JsonBlueprint.Validator where
+module JsonBlueprint.Validator (
+  Error,
+  Errors,
+  JsonPath(..),
+  JsonPathNode(..),
+  ValidationResult,
+  validate
+) where
 
 import Prelude
 import Data.Int as Int

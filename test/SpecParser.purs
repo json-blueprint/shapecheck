@@ -15,7 +15,7 @@ import Data.Sequence (Seq, empty, null, snoc, unsnoc)
 import Data.String (split, toCharArray)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
-import JsonBlueprint.Parser (jsonPathParser, valuePattern)
+import JsonBlueprint.Parser (jsonPathParser, valuePatternParser)
 import JsonBlueprint.Pattern (Pattern)
 import JsonBlueprint.Validator (JsonPath)
 import Text.Markdown.SlamDown (Block(..), CodeBlockType(..), Inline(..), SlamDown, SlamDownP(SlamDown))
@@ -56,7 +56,7 @@ parseBlock (Right s) (Header 1 is) = Right $ s { name = Just (renderText is) }
 parseBlock (Right s) (Header 2 is) = Right $ s { docs = snoc s.docs doc } where
   doc :: SampleDoc'
   doc = { name: renderText is, json: Nothing, expectedErrors: empty, tags: [] }
-parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p }) <$> doParse "pattern" valuePattern (intercalate "\n" ls)
+parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p }) <$> doParse "pattern" valuePatternParser (intercalate "\n" ls)
 parseBlock (Right s) (CodeBlock (Fenced _ "json") ls) = do
   json <- jsonParser $ intercalate "\n" ls
   case unsnoc s.docs of

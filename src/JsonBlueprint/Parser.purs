@@ -1,4 +1,7 @@
-module JsonBlueprint.Parser where
+module JsonBlueprint.Parser (
+  valuePatternParser,
+  jsonPathParser
+) where
 
 import Prelude
 import Data.Argonaut.Core as Json
@@ -22,8 +25,8 @@ import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
-import JsonBlueprint.Validator (JsonPath(..), JsonPathNode(..))
 import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), emptyNumericDtProps, emptyStringDtProps, group)
+import JsonBlueprint.Validator (JsonPath(..), JsonPathNode(..))
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -314,7 +317,7 @@ property = do
     C.char ':'
     cut do
       S.spaces
-      value <- valuePattern
+      value <- valuePatternParser
       pure $ Property { name, value }
   where
     quotedPropName :: Parser Char PropertyNamePattern
@@ -357,8 +360,8 @@ nonChoiceValuePattern =
     regexStringShorthand :: Parser Char Pattern
     regexStringShorthand = (\re -> StringDataType emptyStringDtProps { pattern = Just re }) <$> regexLiteral
 
-valuePattern :: Parser Char Pattern
-valuePattern = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
+valuePatternParser :: Parser Char Pattern
+valuePatternParser = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
 
 jsonPathParser :: Parser Char JsonPath
 jsonPathParser = do
