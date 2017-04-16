@@ -28,12 +28,6 @@ import Test.Unit (failure, success, suite, test, TestSuite)
 import Test.Unit.Console (TESTOUTPUT)
 import Test.Unit.Main (runTest)
 
--- patternPropertyTests :: forall e. Eff (random :: RANDOM, console :: CONSOLE | e) Unit
--- patternPropertyTests =
---   jackMain [
---     "Test.PatternProps"
---   ]
-
 skipSpecsTagged :: Array String
 skipSpecsTagged = ["StrictInt"]
 
