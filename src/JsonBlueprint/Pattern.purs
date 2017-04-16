@@ -1,4 +1,18 @@
-module JsonBlueprint.Pattern where
+module JsonBlueprint.Pattern (
+  Bound(..),
+  emptyNumericDtProps,
+  emptyStringDtProps,
+  flattenChoice,
+  flattenGroup,
+  GenRegex(..),
+  group,
+  NumericDtProps(..),
+  Pattern(..),
+  PropertyNamePattern(..),
+  propNameRequiresQuoting,
+  RepeatCount(..),
+  StringDtProps(..)
+) where
 
 import Prelude
 import Data.String as Str
@@ -91,7 +105,7 @@ data Pattern = Empty
              | Choice Pattern Pattern
              | Group Pattern Pattern
              | Repeat Pattern RepeatCount
-             | ArrayPattern (List Pattern)
+             | ArrayPattern Pattern
              | Property { name :: PropertyNamePattern, value :: Pattern }
              | Object (List Pattern)
 
@@ -136,14 +150,10 @@ instance showPattern :: Show Pattern where
       showTerm p@(Property _) = "(" <> show p <> ")"
       showTerm p              = show p
 
-  show (ArrayPattern ps) = "[" <> intercalate ", " (show <$> ps) <> "]"
+  show (ArrayPattern (Group p1 p2)) = "[" <> commaSeparatedGroup p1 p2 <> "]"
+  show (ArrayPattern p) = "[" <> show p <> "]"
 
-  show (Group p1 p2) = "(" <> intercalate ", " (show <$> (flatten $ p1 : p2 : Nil)) <> ")"
-    where
-      flatten :: List Pattern -> List Pattern
-      flatten Nil = Nil
-      flatten (Cons (Group g1 g2) xs) = concat $ (flatten (g1 : g2 : Nil)) : (flatten xs) : Nil
-      flatten (Cons x xs) = x : flatten xs
+  show (Group p1 p2) = "(" <> commaSeparatedGroup p1 p2 <> ")"
 
   show (Repeat p count) = showRepeated p <> show count
     where
@@ -157,6 +167,9 @@ instance showPattern :: Show Pattern where
   show (Object props)             = "{\n  " <> indent (intercalate ",\n" (show <$> props)) <> "\n}" where
     indent :: String -> String
     indent = Str.replaceAll (Str.Pattern "\n") (Str.Replacement "\n  ")
+
+commaSeparatedGroup :: Pattern -> Pattern -> String
+commaSeparatedGroup p1 p2 = intercalate ", " (show <$> (flattenGroup $ p1 : p2 : Nil))
 
 showProps :: Array (Maybe { name :: String, value :: String }) -> String
 showProps xs =
@@ -176,6 +189,16 @@ boundProp baseName optBound = do
       Bound { value, inclusive } -> { name: propName inclusive, value: show value }
   where
     propName inclusive = baseName <> if inclusive then "" else "Exclusive"
+
+flattenGroup :: List Pattern -> List Pattern
+flattenGroup Nil = Nil
+flattenGroup (Cons (Group g1 g2) xs) = concat $ (flattenGroup (g1 : g2 : Nil)) : (flattenGroup xs) : Nil
+flattenGroup (Cons x xs) = x : flattenGroup xs
+
+flattenChoice :: List Pattern -> List Pattern
+flattenChoice Nil = Nil
+flattenChoice (Cons (Choice g1 g2) xs) = concat $ (flattenChoice (g1 : g2 : Nil)) : (flattenChoice xs) : Nil
+flattenChoice (Cons x xs) = x : flattenChoice xs
 
 derive instance genericPattern :: Generic Pattern
 

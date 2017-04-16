@@ -19,7 +19,7 @@ import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sa
 import Data.Foldable (class Foldable, foldl)
 import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
-import Data.List (List, (:))
+import Data.List (List(..), (:))
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
@@ -290,8 +290,13 @@ repeatCount =
         max <- (const (Just min) <$> C.char '}') <|> parseUpperBound
         pure $ RepeatCount { min, max }
 
+list2Group :: List Pattern -> Pattern
+list2Group Nil = Empty
+list2Group (p : Nil) = p
+list2Group ps = foldl group Empty ps
+
 arrayPattern :: Parser Char Pattern
-arrayPattern = commaSeparated '[' arrayContent ']' ArrayPattern  where
+arrayPattern = commaSeparated '[' arrayContent ']' (ArrayPattern <<< list2Group)  where
   arrayGroup :: Parser Char Pattern
   arrayGroup = lazyParser (defer \_ -> groupParser arrayContent)
 
