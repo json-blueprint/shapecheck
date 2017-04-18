@@ -332,7 +332,7 @@ property = do
     propName = (LiteralName <$> simplePropName) <|> quotedPropName
 
 object :: Parser Char Pattern
-object = commaSeparated '{' objectContent '}' Object where
+object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
   objectGroup :: Parser Char Pattern
   objectGroup = lazyParser (defer \_ -> groupParser objectContent)
 

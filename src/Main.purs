@@ -1,5 +1,6 @@
 module Main (
-  createValidator
+  createValidator,
+  JsValidationError
 ) where
 
 import Prelude
@@ -17,11 +18,11 @@ import Data.Foldable (intercalate)
 import Data.Validation.Semigroup (unV)
 import JsonBlueprint.Parser (valuePatternParser)
 import JsonBlueprint.Pattern (Pattern)
-import JsonBlueprint.Validator (Errors, ValidationResult, Error)
+import JsonBlueprint.Validator (ValidationError(..), ValidationErrors, ValidationResult)
 
 type Schema = String
 
-type JsValidationError = { message :: String, path :: String, pattern :: String }
+newtype JsValidationError = JsValidationError { message :: String, path :: String, pattern :: String, children :: Array JsValidationError }
 type JsValidationResult = { valid :: Boolean, errors :: Array JsValidationError }
 
 type JsValidator = { validate :: Json -> JsValidationResult }
@@ -44,11 +45,12 @@ validate schema json =
     res2Js res =
       unV failure2Js (const valid) res
 
-    failure2Js :: Errors -> JsValidationResult
+    failure2Js :: ValidationErrors -> JsValidationResult
     failure2Js es = { valid: false, errors: Arr.fromFoldable $ error2Js <$> es }
 
-    error2Js :: Error -> JsValidationError
-    error2Js { path, pattern, message } = { message, path: show path, pattern: show pattern }
+    error2Js :: ValidationError -> JsValidationError
+    error2Js (ValidationError { path, pattern, message, children }) =
+      JsValidationError { message, path: show path, pattern: show pattern, children: Arr.fromFoldable $ error2Js <$> children }
 
     valid :: JsValidationResult
     valid = { valid: true, errors: [] }

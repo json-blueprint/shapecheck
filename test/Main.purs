@@ -18,7 +18,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Data.Validation.Semigroup (unV)
 import JsonBlueprint.Pattern (Pattern)
-import JsonBlueprint.Validator (Error, JsonPath, validate)
+import JsonBlueprint.Validator (ValidationError(..), JsonPath, validate)
 import Node.Encoding (Encoding(..))
 import Node.FS.Aff (readdir)
 import Node.FS.Stats (isDirectory)
@@ -35,7 +35,7 @@ main :: forall e. Eff (err :: EXCEPTION, console :: CONSOLE, testOutput :: TESTO
                         (Canceler (console :: CONSOLE, testOutput :: TESTOUTPUT, avar :: AVAR, fs :: F.FS | e))
 main = launchAff do
   -- specs <- loadSpecs "./specs"
-  specs <- loadSpecs "./specs/scalar"
+  specs <- loadSpecs "./specs/value-choice.md"
   liftEff' $ runTest do
     specs
 
@@ -80,19 +80,19 @@ loadSpecs path =
         else
           failure ("incorrect validation of sample document '" <> doc.name <> "':\n" <> intercalate "\n" problems)
       where
-        actualErrors :: Seq.Seq Error
+        actualErrors :: Seq.Seq ValidationError
         actualErrors = unV id (const Seq.empty) $ validate doc.json pattern
 
         actualErrorPaths :: Seq.Seq JsonPath
-        actualErrorPaths = (\err -> err.path) <$> actualErrors
+        actualErrorPaths = (\(ValidationError err) -> err.path) <$> actualErrors
 
-        unexpected :: Seq.Seq Error
-        unexpected = Seq.filter (\err -> not $ elem err.path doc.expectedErrors) actualErrors
+        unexpected :: Seq.Seq ValidationError
+        unexpected = Seq.filter (\(ValidationError err) -> not $ elem err.path doc.expectedErrors) actualErrors
 
         missing :: Seq.Seq JsonPath
         missing = Seq.filter (\i -> not $ elem i actualErrorPaths) doc.expectedErrors
 
         problems :: Seq.Seq String
         problems =
-          ((\err -> "    - unexpected error at `" <> show err.path <> "`: " <> err.message) <$> unexpected) <>
+          ((\(ValidationError err) -> "    - unexpected error at `" <> show err.path <> "`: " <> err.message) <$> unexpected) <>
           ((\jp -> "    - missing error at `" <> show jp <> "`") <$> missing)

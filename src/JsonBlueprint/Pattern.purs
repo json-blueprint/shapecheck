@@ -4,6 +4,8 @@ module JsonBlueprint.Pattern (
   emptyStringDtProps,
   flattenChoice,
   flattenGroup,
+  foldChoice,
+  foldGroup,
   GenRegex(..),
   group,
   NumericDtProps(..),
@@ -15,12 +17,13 @@ module JsonBlueprint.Pattern (
 ) where
 
 import Prelude
+import Data.Sequence as Seq
 import Data.String as Str
 import Data.Array (catMaybes, intercalate)
 import Data.Either (Either(..))
 import Data.Generic (class Generic, GenericSignature(..), GenericSpine(..), gEq)
-import Data.List (concat, List(..), (:))
 import Data.Maybe (Maybe(..))
+import Data.Sequence (Seq)
 import Data.String.Regex (Regex, flags, parseFlags, renderFlags, regex, source, test)
 import Data.String.Regex.Flags (ignoreCase)
 import Data.String.Regex.Unsafe (unsafeRegex)
@@ -107,7 +110,7 @@ data Pattern = Empty
              | Repeat Pattern RepeatCount
              | ArrayPattern Pattern
              | Property { name :: PropertyNamePattern, value :: Pattern }
-             | Object (List Pattern)
+             | Object Pattern
 
 type StringDtProps = { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
 emptyStringDtProps :: StringDtProps
@@ -150,10 +153,10 @@ instance showPattern :: Show Pattern where
       showTerm p@(Property _) = "(" <> show p <> ")"
       showTerm p              = show p
 
-  show (ArrayPattern (Group p1 p2)) = "[" <> commaSeparatedGroup p1 p2 <> "]"
+  show (ArrayPattern g@(Group _ _)) = "[" <> commaSeparatedGroup g <> "]"
   show (ArrayPattern p) = "[" <> show p <> "]"
 
-  show (Group p1 p2) = "(" <> commaSeparatedGroup p1 p2 <> ")"
+  show g@(Group _ _) = "(" <> commaSeparatedGroup g <> ")"
 
   show (Repeat p count) = showRepeated p <> show count
     where
@@ -163,13 +166,15 @@ instance showPattern :: Show Pattern where
       showRepeated _            = show p
 
   show (Property { name, value }) = show name <> ": " <> show value
-  show (Object Nil)               = "{}"
-  show (Object props)             = "{\n  " <> indent (intercalate ",\n" (show <$> props)) <> "\n}" where
-    indent :: String -> String
-    indent = Str.replaceAll (Str.Pattern "\n") (Str.Replacement "\n  ")
+  show (Object Empty)             = "{}"
+  show (Object g@(Group _ _))     = "{\n  " <> indent (intercalate ",\n" (show <$> (flattenGroup g))) <> "\n}"
+  show (Object p)                 = "{\n  " <> indent (show p) <> "\n}"
 
-commaSeparatedGroup :: Pattern -> Pattern -> String
-commaSeparatedGroup p1 p2 = intercalate ", " (show <$> (flattenGroup $ p1 : p2 : Nil))
+indent :: String -> String
+indent = Str.replaceAll (Str.Pattern "\n") (Str.Replacement "\n  ")
+
+commaSeparatedGroup :: Pattern -> String
+commaSeparatedGroup g = intercalate ", " (show <$> (flattenGroup g))
 
 showProps :: Array (Maybe { name :: String, value :: String }) -> String
 showProps xs =
@@ -190,15 +195,21 @@ boundProp baseName optBound = do
   where
     propName inclusive = baseName <> if inclusive then "" else "Exclusive"
 
-flattenGroup :: List Pattern -> List Pattern
-flattenGroup Nil = Nil
-flattenGroup (Cons (Group g1 g2) xs) = concat $ (flattenGroup (g1 : g2 : Nil)) : (flattenGroup xs) : Nil
-flattenGroup (Cons x xs) = x : flattenGroup xs
+foldGroup :: forall o. (o -> Pattern -> o) -> o -> Pattern -> o
+foldGroup f accu = case _ of
+  Group p1 p2 -> foldGroup f (foldChoice f accu p1) p2
+  other -> f accu other
 
-flattenChoice :: List Pattern -> List Pattern
-flattenChoice Nil = Nil
-flattenChoice (Cons (Choice g1 g2) xs) = concat $ (flattenChoice (g1 : g2 : Nil)) : (flattenChoice xs) : Nil
-flattenChoice (Cons x xs) = x : flattenChoice xs
+flattenGroup :: Pattern -> Seq Pattern
+flattenGroup = foldGroup Seq.snoc Seq.empty
+
+foldChoice :: forall o. (o -> Pattern -> o) -> o -> Pattern -> o
+foldChoice f accu = case _ of
+  Choice p1 p2 -> foldChoice f (foldChoice f accu p1) p2
+  other -> f accu other
+
+flattenChoice :: Pattern -> Seq Pattern
+flattenChoice = foldChoice Seq.snoc Seq.empty
 
 derive instance genericPattern :: Generic Pattern
 
