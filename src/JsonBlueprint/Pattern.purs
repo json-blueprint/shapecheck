@@ -97,6 +97,7 @@ instance showPropertyNamePattern :: Show PropertyNamePattern where
 derive instance genericPropertyNamePattern :: Generic PropertyNamePattern
 
 data Pattern = Empty
+             | Any
              | Null
              | BooleanLiteral Boolean
              | BooleanDataType
@@ -133,6 +134,7 @@ group p1 p2    = Group p1 p2
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
+  show Any   = "Any"
   show Null  = "null"
   show (BooleanLiteral b)  = show b
   show BooleanDataType     = "Boolean"

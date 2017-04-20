@@ -43,6 +43,8 @@ validate = validateValue mempty
 -- | content, where the pattern usually matches each item / property only partially)
 validateValue :: JsonPath -> Json -> Pattern -> Either ValidationErrors Unit
 validateValue path json pattern = case pattern of
+    Any -> pure unit
+
     Null -> const unit <$> expectX "null" foldJsonNull json
 
     BooleanDataType -> const unit <$> expectBoolean json
@@ -80,7 +82,7 @@ validateValue path json pattern = case pattern of
       arr <- expectX "Array" foldJsonArray json
       validateArray path arr contentP
 
-    _ -> pure unit
+    _ -> fail $ "Unexpected pattern type found in JSON value position (this is most likely a bug in the validator): " <> show pattern
   where
     fail :: forall a. String -> Either ValidationErrors a
     fail msg = Left $ pure $ error msg

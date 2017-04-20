@@ -344,6 +344,7 @@ object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
+    anyValue <|>
     null <|>
     booleanLiteral <|>
     booleanDataType <|>
@@ -358,6 +359,9 @@ nonChoiceValuePattern =
   where
     null :: Parser Char Pattern
     null = const Null <$> S.string "null"
+
+    anyValue :: Parser Char Pattern
+    anyValue = const Any <$> S.string "Any"
 
     -- allows using literal pattenr (f.ex. /[a-z]/i) instead of full String(pattern = /[a-z]/i)
     regexStringShorthand :: Parser Char Pattern
