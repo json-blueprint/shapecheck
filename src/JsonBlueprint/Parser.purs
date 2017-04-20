@@ -19,14 +19,14 @@ import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sa
 import Data.Foldable (class Foldable, foldl, foldr)
 import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
-import Data.List (List(..), (:))
+import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
 import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), emptyNumericDtProps, emptyStringDtProps, group)
-import JsonBlueprint.Validator (JsonPath(..), JsonPathNode(..))
+import JsonBlueprint.JsonPath (JsonPath(..), JsonPathNode(..))
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a

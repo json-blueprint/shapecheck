@@ -1,4 +1,4 @@
-# exactly X repetitions in an array  
+# exactly X repetitions in an array
 ```jsbp
 [Int{2}]
 ```

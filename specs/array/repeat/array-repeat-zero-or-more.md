@@ -1,4 +1,4 @@
-# zero or more repetitions in an array  
+# zero or more repetitions in an array
 ```jsbp
 [Int*]
 ```

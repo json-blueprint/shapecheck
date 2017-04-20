@@ -1,8 +1,6 @@
 module JsonBlueprint.Validator (
   ValidationError(..),
   ValidationErrors,
-  JsonPath(..),
-  JsonPathNode(..),
   validate
 ) where
 
@@ -14,47 +12,15 @@ import Data.String.Regex as Regex
 import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonString)
 import Data.Array (mapWithIndex)
 import Data.Either (Either(..), fromRight)
-import Data.Foldable (foldl, intercalate)
+import Data.Foldable (foldl)
 import Data.Maybe (Maybe(..), maybe)
-import Data.Monoid (class Monoid, mempty)
-import Data.Sequence (Seq, empty, snoc)
+import Data.Monoid (mempty)
+import Data.Sequence (Seq, empty)
 import Data.Tuple (Tuple(..))
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), group, propNameRequiresQuoting)
+import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), group)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
-
--- | simple jq-like path pointing to a locaiton in a JSON document
-newtype JsonPath = JsonPath (Seq JsonPathNode)
-
-instance semigroupJsonPath :: Semigroup JsonPath where
-  append (JsonPath ns) (JsonPath ms) = JsonPath $ ns <> ms
-
-instance monoidJsonPath :: Monoid JsonPath where
-  mempty = JsonPath (mempty :: Seq JsonPathNode)
-
-instance showJsonPath :: Show JsonPath where
-  show (JsonPath ns) = "." <> intercalate "." (show <$> ns)
-
-instance eqJsonPath :: Eq JsonPath where
-  eq (JsonPath n1s) (JsonPath n2s) = n1s == n2s
-
-appendNode :: JsonPath -> JsonPathNode -> JsonPath
-appendNode (JsonPath ns) n = JsonPath $ snoc ns n
-
-infixr 5 appendNode as \
-
-data JsonPathNode = KeyNode String
-                  | IdxNode Int
-
-instance eqJsonPathNode :: Eq JsonPathNode where
-  eq (KeyNode k1) (KeyNode k2) = k1 == k2
-  eq (IdxNode i1) (IdxNode i2) = i2 == i2
-  eq _ _ = false
-
-instance showJsonPathNode :: Show JsonPathNode where
-  show (KeyNode key) | propNameRequiresQuoting key = "[" <> show key <> "]"
-                     | otherwise = key
-  show (IdxNode idx) = "[" <> show idx <> "]"
 
 -- | type of validation errors; it's a newtype as type synonyms can't be recursive
 newtype ValidationError = ValidationError { path :: JsonPath, pattern :: Pattern, message :: String, children :: Seq ValidationError }
