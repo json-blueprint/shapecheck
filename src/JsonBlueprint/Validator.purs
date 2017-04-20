@@ -3,7 +3,6 @@ module JsonBlueprint.Validator (
   ValidationErrors,
   JsonPath(..),
   JsonPathNode(..),
-  ValidationResult,
   validate
 ) where
 
@@ -12,14 +11,15 @@ import Data.Int as Int
 import Data.Sequence as Seq
 import Data.String as Str
 import Data.String.Regex as Regex
-import Data.Argonaut.Core (Json, foldJson, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonString)
+import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonString)
+import Data.Array (mapWithIndex)
 import Data.Either (Either(..), fromRight)
-import Data.Foldable (intercalate)
+import Data.Foldable (foldl, intercalate)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (class Monoid, mempty)
-import Data.Sequence (Seq, snoc)
-import Data.Validation.Semigroup (V, invalid, unV)
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), foldChoice, propNameRequiresQuoting)
+import Data.Sequence (Seq, empty, snoc)
+import Data.Tuple (Tuple(..))
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), group, propNameRequiresQuoting)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
 
@@ -56,9 +56,6 @@ instance showJsonPathNode :: Show JsonPathNode where
                      | otherwise = key
   show (IdxNode idx) = "[" <> show idx <> "]"
 
--- | result of JSON value validation
-type ValidationResult = V ValidationErrors Unit
-
 -- | type of validation errors; it's a newtype as type synonyms can't be recursive
 newtype ValidationError = ValidationError { path :: JsonPath, pattern :: Pattern, message :: String, children :: Seq ValidationError }
 
@@ -71,69 +68,18 @@ instance showValidationError :: Show ValidationError where
 
 type ValidationErrors = Seq ValidationError
 
--- | when matching Pattern against part of complex JSON value (an array item or
--- | a property of JSON object), it doesn't have to match fully - we can be left
--- | with some remainder of the pattern which for subsequent items / properties -
--- | this is called a "derivative" of the Pattern with respect to the given
--- | JSON node
-type VDeriv = V ValidationErrors Pattern
-
--- | nullable Pattern matches empty input (f.ex. in array content validation,
--- | the array content is valid if derivative of last array element is nullable)
-nullable :: Pattern -> Boolean
-nullable Empty = true
-nullable (Group p1 p2) = nullable p1 && nullable p2
-nullable (Choice p1 p2) = nullable p1 || nullable p2
-nullable (Repeat p (RepeatCount { min })) = nullable p || min <= 0
-nullable _ = false
-
-validate :: Json -> Pattern -> ValidationResult
+validate :: Json -> Pattern -> Either ValidationErrors Unit
 validate = validateValue mempty
-
-mapErr :: forall e1 e2 o. Semigroup e1 => Semigroup e2 => (e1 -> e2) -> V e1 o -> V e2 o
-mapErr f = unV (invalid <<< f) pure
-
-choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> VDeriv) -> Pattern -> VDeriv
-choiceDeriv createError doValidate pattern =
-    unV
-      (invalid <<< Seq.singleton <<< createError "None of allowed patterns matches JSON value")
-      pure
-      (choiceDeriv' doValidate pattern)
-
-choiceDeriv' :: (Pattern -> VDeriv) -> Pattern -> VDeriv
-choiceDeriv' doValidate =
-    foldChoice
-      (\acc p -> appendDeriv acc $ doValidate p)
-      (invalid Seq.empty)
-  where
-    -- | with choice, the combination of errors is non-standard:
-    -- |   - if either one of the branches is valid, it's derivative is the result
-    -- |   - if both branches are valid, the result is Choice between derivatives of both
-    -- |   - if none of the branches are valid, we want to aggregate the error messages
-    appendDeriv :: VDeriv -> VDeriv -> VDeriv
-    appendDeriv d1 d2 =
-      unV
-        (\err1 ->
-          unV
-            (invalid <<< (<>) err1)
-            pure
-            d2)
-        (\der1 ->
-          unV
-            (const $ pure der1)
-            (pure <<< Choice der1)
-            d2)
-        d1
 
 -- | validates given JSON value (null / Boolean / String / Number / Array / Object)
 -- | against the given pattern; this does not produce a derivative each of these
 -- | values have to fully match given pattern (unlike validation of array / object
 -- | content, where the pattern usually matches each item / property only partially)
-validateValue :: JsonPath -> Json -> Pattern -> ValidationResult
+validateValue :: JsonPath -> Json -> Pattern -> Either ValidationErrors Unit
 validateValue path json pattern = case pattern of
-    Null -> fromEither $ expectX "null" foldJsonNull json
+    Null -> const unit <$> expectX "null" foldJsonNull json
 
-    BooleanDataType -> fromEither $ expectBoolean json
+    BooleanDataType -> const unit <$> expectBoolean json
 
     BooleanLiteral bool -> validateLiteral bool (expectBoolean json)
 
@@ -141,36 +87,35 @@ validateValue path json pattern = case pattern of
 
     NumberLiteral num -> validateLiteral num (expectNumber json)
 
-    StringDataType { minLength, maxLength, pattern: regex } -> fromEither do
+    StringDataType { minLength, maxLength, pattern: regex } -> do
       actual <- expectString json
-      toEither $ check (\min -> { ok: Str.length actual >= min, errMsg: "String is too short. Expected at least " <> show min <> " characters."}) minLength *>
-                 check (\max -> { ok: Str.length actual <= max, errMsg: "String is too long. Epected at most " <> show max <> " characters." }) maxLength *>
-                 check (\re -> { ok: matches re actual, errMsg: "String doesn't match regular expression: " <> show re }) regex
+      checkAll [check (\min -> { ok: Str.length actual >= min, errMsg: "String is too short. Expected at least " <> show min <> " characters."}) minLength,
+                check (\max -> { ok: Str.length actual <= max, errMsg: "String is too long. Epected at most " <> show max <> " characters." }) maxLength,
+                check (\re -> { ok: matches re actual, errMsg: "String doesn't match regular expression: " <> show re }) regex]
 
-    NumberDataType props -> fromEither do
+    NumberDataType props -> do
       actual <- expectNumber json
-      toEither $ validateNumeric props actual remainder
+      validateNumeric props actual remainder
 
-    IntDataType props -> fromEither do
+    IntDataType props -> do
       num <- expectNumber json
       case Int.fromNumber num of
-        Just int -> toEither $ validateNumeric props int mod
+        Just int -> validateNumeric props int mod
         Nothing -> fail "Expected integer but found decimal number"
 
-    Choice _ _ -> choiceDeriv aggError validateWithDeriv pattern *> pure unit
+    Choice _ _ ->
+      let
+        result = choiceDeriv aggError (validateValueDeriv path json) pattern
+      in
+        if isValid result then pure unit
+        else Left result.errors
+
+    ArrayPattern contentP -> do
+      arr <- expectX "Array" foldJsonArray json
+      validateArray path arr contentP
 
     _ -> pure unit
   where
-    validateWithDeriv :: Pattern -> VDeriv
-    validateWithDeriv p = validateValue path json p *> pure Empty
-
-    fromEither :: forall a. Either ValidationErrors a -> ValidationResult
-    fromEither (Right _) = pure unit
-    fromEither (Left err) = invalid err
-
-    toEither :: ValidationResult -> Either ValidationErrors Unit
-    toEither res = unV Left Right res
-
     fail :: forall a. String -> Either ValidationErrors a
     fail msg = Left $ pure $ error msg
 
@@ -180,11 +125,19 @@ validateValue path json pattern = case pattern of
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
 
-    check :: forall a. (a -> { ok :: Boolean, errMsg :: String }) -> Maybe a -> ValidationResult
+    checkAll :: Array (Either ValidationErrors Unit) -> Either ValidationErrors Unit
+    checkAll = foldl combineErrors (pure unit) where
+      combineErrors :: Either ValidationErrors Unit -> Either ValidationErrors Unit -> Either ValidationErrors Unit
+      combineErrors (Left es1) (Left es2) = Left $ es1 <> es2
+      combineErrors l@(Left _) _          = l
+      combineErrors _          l@(Left _) = l
+      combineErrors a          _          = a
+
+    check :: forall a. (a -> { ok :: Boolean, errMsg :: String }) -> Maybe a -> Either ValidationErrors Unit
     check _ Nothing = pure unit
     check f (Just val) =
         if result.ok then pure unit
-        else invalid $ pure $ error result.errMsg
+        else fail result.errMsg
       where
         result = f (val)
 
@@ -200,27 +153,27 @@ validateValue path json pattern = case pattern of
     expectNumber :: Json -> Either ValidationErrors Number
     expectNumber = expectX "Number" foldJsonNumber
 
-    validateLiteral :: forall a. Eq a => Show a => a -> Either ValidationErrors a -> ValidationResult
-    validateLiteral expected actual = fromEither do
+    validateLiteral :: forall a. Eq a => Show a => a -> Either ValidationErrors a -> Either ValidationErrors Unit
+    validateLiteral expected actual = do
       act <- actual
       (if act == expected then pure unit
        else fail $ "Invalid value. Expected " <> show expected)
 
-    checkBound :: forall n. n -> (n -> n -> Boolean) -> (n -> n -> Boolean) -> Maybe (Bound n) -> (n -> Boolean -> String) -> ValidationResult
+    checkBound :: forall n. n -> (n -> n -> Boolean) -> (n -> n -> Boolean) -> Maybe (Bound n) -> (n -> Boolean -> String) -> Either ValidationErrors Unit
     checkBound _ _ _ Nothing _ = pure unit
     checkBound actual exclOp inclOp (Just (Bound { value, inclusive })) createErrMsg =
       let
         effectiveOp = if inclusive then inclOp else exclOp
       in
         if actual `effectiveOp` value then pure unit
-        else invalid $ pure $ error $ createErrMsg value inclusive
+        else fail $ createErrMsg value inclusive
 
     validateNumeric :: forall n. Ord n => EuclideanRing n => Show n =>
-                       { min :: Maybe (Bound n), max :: Maybe (Bound n), multipleOf :: Maybe n } -> n -> (n -> n -> n) -> ValidationResult
+                       { min :: Maybe (Bound n), max :: Maybe (Bound n), multipleOf :: Maybe n } -> n -> (n -> n -> n) -> Either ValidationErrors Unit
     validateNumeric { min, max, multipleOf } actual rem =
-        checkBound actual (>) (>=) min numberTooLowErr *>
-        checkBound actual (<) (<=) max numberTooHighErr *>
-        check (\factor -> { ok: actual `rem` factor == zero, errMsg: "Number is not multiple of " <> show factor }) multipleOf
+        checkAll [checkBound actual (>) (>=) min numberTooLowErr,
+                  checkBound actual (<) (<=) max numberTooHighErr,
+                  check (\factor -> { ok: actual `rem` factor == zero, errMsg: "Number is not multiple of " <> show factor }) multipleOf]
       where
         numberTooLowErr :: n -> Boolean -> String
         numberTooLowErr m inclusive = "Number is lower than minimal allowed value of " <> show m <> if inclusive then "" else " (exclusive)"
@@ -240,6 +193,107 @@ validateValue path json pattern = case pattern of
       effRegexStr = if charAtEq 0 '^' regexStr then regexStr else "^" <> regexStr
       effRegexStr' = if charAtEq ((Str.length effRegexStr) - 1) '$' effRegexStr then effRegexStr else effRegexStr <> "$"
       effRegex = unsafePartial $ fromRight $ Regex.regex effRegexStr' (Regex.flags regex)
+
+validateValueDeriv :: JsonPath -> Json -> Pattern -> Derivative
+validateValueDeriv path json = result2Deriv <<< (validateValue path json) where
+  result2Deriv :: Either ValidationErrors Unit -> Derivative
+  result2Deriv (Right _) = { deriv: Empty, errors: empty }
+  result2Deriv (Left es) = { deriv: Empty, errors: es }
+
+validateArray :: JsonPath -> Array Json -> Pattern -> Either ValidationErrors Unit
+validateArray basePath is pattern =
+    let
+      zippedWithPath = mapWithIndex (\idx item -> { json: item, path: basePath \ IdxNode idx }) is
+      result = foldl validateArrayItem { deriv: pattern, errors: empty } zippedWithPath
+    in
+      if nullable result.deriv then deriv2Either result
+      else
+        let
+          message = "Unexpected end of array. Pattern for the next item: " <> show result.deriv
+          err = ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
+        in Left $ Seq.snoc result.errors err
+  where
+    deriv2Either :: Derivative -> Either ValidationErrors Unit
+    deriv2Either der =
+      if isValid der then pure unit
+      else Left der.errors
+
+validateArrayItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
+validateArrayItem { deriv, errors } { json, path } =
+  let result = validateArrayItem' path json deriv
+  in { deriv: result.deriv, errors: errors <> result.errors }
+
+validateArrayItem' :: JsonPath -> Json -> Pattern -> Derivative
+validateArrayItem' path json pattern = case pattern of
+    Group gHead gTail ->
+      let headRes = recur gHead in
+        if nullable gHead then
+          let tailRes = recur gTail
+          in
+            case Tuple (isValid headRes) (isValid tailRes) of
+              Tuple true  true  -> { deriv: Choice (group headRes.deriv gTail) tailRes.deriv, errors: empty }
+              Tuple true  false -> { deriv: group headRes.deriv gTail, errors: empty }
+              Tuple false true  -> { deriv: tailRes.deriv, errors: empty }
+              Tuple false false -> { deriv: Empty, errors: Seq.singleton $ aggError "Invalid array item (two alternatives tried)" (headRes.errors <> tailRes.errors) }
+        else
+          headRes { deriv = group headRes.deriv gTail }
+
+    ch@(Choice _ _) -> choiceDeriv aggError recur pattern
+
+    Empty -> fail "Expected end of array"
+
+    other -> validateValueDeriv path json other
+  where
+    recur :: Pattern -> Derivative
+    recur = validateArrayItem' path json
+
+    error :: String -> ValidationError
+    error message = ValidationError { path, pattern, message, children: Seq.empty }
+
+    fail :: String -> Derivative
+    fail message = { deriv: Empty, errors: Seq.singleton $ error message }
+
+    aggError :: String -> ValidationErrors -> ValidationError
+    aggError message children = ValidationError { path, pattern, message, children }
+
+-- | when matching Pattern against part of complex JSON value (an array item or
+-- | a property of JSON object), it doesn't have to match fully - we can be left
+-- | with some remainder of the pattern which for subsequent items / properties -
+-- | this is called a "derivative" of the Pattern with respect to the given
+-- | JSON node
+type Derivative = { deriv :: Pattern, errors :: ValidationErrors }
+
+isValid :: Derivative -> Boolean
+isValid { errors } = Seq.null errors
+
+choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
+choiceDeriv createError doValidate pattern =
+  let
+    result = choiceDeriv' doValidate pattern
+  in
+    if isValid result then result
+    else { deriv: Empty, errors: Seq.singleton $ createError "None of allowed patterns matches JSON value" result.errors }
+
+choiceDeriv' :: (Pattern -> Derivative) -> Pattern -> Derivative
+choiceDeriv' doValidate = case _ of
+    Choice p1 p2 -> appendDeriv (choiceDeriv' doValidate p1) (choiceDeriv' doValidate p2)
+    other -> doValidate other
+  where
+    appendDeriv :: Derivative -> Derivative -> Derivative
+    appendDeriv d1 d2 = case Tuple (isValid d1) (isValid d2) of
+      Tuple true  true  -> { deriv: Choice d1.deriv d2.deriv, errors: empty }
+      Tuple true  false -> d1
+      Tuple false true  -> d2
+      Tuple false false -> { deriv: Empty, errors: d1.errors <> d2.errors }
+
+-- | nullable Pattern matches empty input (f.ex. in array content validation,
+-- | the array content is valid if derivative of last array element is nullable)
+nullable :: Pattern -> Boolean
+nullable Empty = true
+nullable (Group p1 p2) = nullable p1 && nullable p2
+nullable (Choice p1 p2) = nullable p1 || nullable p2
+nullable (Repeat p (RepeatCount { min })) = nullable p || min <= 0
+nullable _ = false
 
 describeType :: Json -> String
 describeType = foldJson

@@ -15,10 +15,9 @@ import Data.Eulalie.Parser (eof, parse, Parser)
 import Data.Eulalie.Result (ParseResult(..))
 import Data.Eulalie.Stream (stream, Stream)
 import Data.Foldable (intercalate)
-import Data.Validation.Semigroup (unV)
 import JsonBlueprint.Parser (valuePatternParser)
 import JsonBlueprint.Pattern (Pattern)
-import JsonBlueprint.Validator (ValidationError(..), ValidationErrors, ValidationResult)
+import JsonBlueprint.Validator (ValidationError(..), ValidationErrors)
 
 type Schema = String
 
@@ -41,9 +40,9 @@ validate :: Pattern -> Json -> JsValidationResult
 validate schema json =
     res2Js $ Validator.validate json schema
   where
-    res2Js :: ValidationResult -> JsValidationResult
-    res2Js res =
-      unV failure2Js (const valid) res
+    res2Js :: Either ValidationErrors Unit -> JsValidationResult
+    res2Js (Right _) = valid
+    res2Js (Left es) = failure2Js es
 
     failure2Js :: ValidationErrors -> JsValidationResult
     failure2Js es = { valid: false, errors: Arr.fromFoldable $ error2Js <$> es }

@@ -14,9 +14,9 @@ import Data.Array (intersect, null, uncons)
 import Data.Either (Either(..))
 import Data.Foldable (elem, foldl, intercalate)
 import Data.Maybe (Maybe(..))
+import Data.Sequence (Seq)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
-import Data.Validation.Semigroup (unV)
 import JsonBlueprint.Pattern (Pattern)
 import JsonBlueprint.Validator (ValidationError(..), JsonPath, validate)
 import Node.Encoding (Encoding(..))
@@ -35,7 +35,7 @@ main :: forall e. Eff (err :: EXCEPTION, console :: CONSOLE, testOutput :: TESTO
                         (Canceler (console :: CONSOLE, testOutput :: TESTOUTPUT, avar :: AVAR, fs :: F.FS | e))
 main = launchAff do
   -- specs <- loadSpecs "./specs"
-  specs <- loadSpecs "./specs/value-choice.md"
+  specs <- loadSpecs "./specs"
   liftEff' $ runTest do
     specs
 
@@ -65,10 +65,10 @@ loadSpecs path =
         Left err -> test testFileName $ Assert.assert err false
         Right { name, pattern, docs } -> test name $ assertions pattern (filterDocs docs)
 
-    filterDocs :: Seq.Seq SampleDoc -> Seq.Seq SampleDoc
+    filterDocs :: Seq SampleDoc -> Seq SampleDoc
     filterDocs = Seq.filter (\d -> null $ intersect d.tags skipSpecsTagged)
 
-    assertions :: forall e. Pattern -> Seq.Seq SampleDoc -> Aff e Unit
+    assertions :: forall e. Pattern -> Seq SampleDoc -> Aff e Unit
     assertions pattern docs = case Seq.uncons $ (assertion pattern) <$> docs of
       Just (Tuple a as) -> foldl bind a (const <$> as)
       Nothing -> failure "no sample documents in this spec"
@@ -80,19 +80,21 @@ loadSpecs path =
         else
           failure ("incorrect validation of sample document '" <> doc.name <> "':\n" <> intercalate "\n" problems)
       where
-        actualErrors :: Seq.Seq ValidationError
-        actualErrors = unV id (const Seq.empty) $ validate doc.json pattern
+        actualErrors :: Seq ValidationError
+        actualErrors = case validate doc.json pattern of
+          Left errs -> errs
+          Right _ -> Seq.empty
 
-        actualErrorPaths :: Seq.Seq JsonPath
+        actualErrorPaths :: Seq JsonPath
         actualErrorPaths = (\(ValidationError err) -> err.path) <$> actualErrors
 
-        unexpected :: Seq.Seq ValidationError
+        unexpected :: Seq ValidationError
         unexpected = Seq.filter (\(ValidationError err) -> not $ elem err.path doc.expectedErrors) actualErrors
 
-        missing :: Seq.Seq JsonPath
+        missing :: Seq JsonPath
         missing = Seq.filter (\i -> not $ elem i actualErrorPaths) doc.expectedErrors
 
-        problems :: Seq.Seq String
+        problems :: Seq String
         problems =
           ((\(ValidationError err) -> "    - unexpected error at `" <> show err.path <> "`: " <> err.message) <$> unexpected) <>
           ((\jp -> "    - missing error at `" <> show jp <> "`") <$> missing)
