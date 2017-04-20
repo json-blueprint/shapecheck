@@ -16,7 +16,7 @@ import Data.Char (fromCharCode, toLower)
 import Data.Char.Unicode (isHexDigit)
 import Data.Either (Either(..))
 import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy)
-import Data.Foldable (class Foldable, foldl)
+import Data.Foldable (class Foldable, foldl, foldr)
 import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
 import Data.List (List(..), (:))
@@ -291,9 +291,7 @@ repeatCount =
         pure $ RepeatCount { min, max }
 
 list2Group :: List Pattern -> Pattern
-list2Group Nil = Empty
-list2Group (p : Nil) = p
-list2Group ps = foldl group Empty ps
+list2Group ps = foldr group Empty ps -- used `foldr` to parse `(1, 2, 3)` as `Group 1 (Group 2 3)` and not `Group (Group 1, 2) 3`
 
 arrayPattern :: Parser Char Pattern
 arrayPattern = commaSeparated '[' arrayContent ']' (ArrayPattern <<< list2Group)  where

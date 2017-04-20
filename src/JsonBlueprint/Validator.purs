@@ -15,7 +15,7 @@ import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJ
 import Data.Array (mapWithIndex)
 import Data.Either (Either(..), fromRight)
 import Data.Foldable (foldl, intercalate)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Monoid (class Monoid, mempty)
 import Data.Sequence (Seq, empty, snoc)
 import Data.Tuple (Tuple(..))
@@ -101,7 +101,7 @@ validateValue path json pattern = case pattern of
       num <- expectNumber json
       case Int.fromNumber num of
         Just int -> validateNumeric props int mod
-        Nothing -> fail "Expected integer but found decimal number"
+        Nothing -> fail "Expected Int but found decimal Number"
 
     Choice _ _ ->
       let
@@ -209,7 +209,7 @@ validateArray basePath is pattern =
       if nullable result.deriv then deriv2Either result
       else
         let
-          message = "Unexpected end of array. Pattern for the next item: " <> show result.deriv
+          message = "Unexpected end of array. Pattern for remaining items: " <> show result.deriv
           err = ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
         in Left $ Seq.snoc result.errors err
   where
@@ -240,6 +240,8 @@ validateArrayItem' path json pattern = case pattern of
 
     ch@(Choice _ _) -> choiceDeriv aggError recur pattern
 
+    Repeat p count -> repeatDeriv error recur p count
+
     Empty -> fail "Expected end of array"
 
     other -> validateValueDeriv path json other
@@ -268,8 +270,7 @@ isValid { errors } = Seq.null errors
 
 choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
 choiceDeriv createError doValidate pattern =
-  let
-    result = choiceDeriv' doValidate pattern
+  let result = choiceDeriv' doValidate pattern
   in
     if isValid result then result
     else { deriv: Empty, errors: Seq.singleton $ createError "None of allowed patterns matches JSON value" result.errors }
@@ -285,6 +286,23 @@ choiceDeriv' doValidate = case _ of
       Tuple true  false -> d1
       Tuple false true  -> d2
       Tuple false false -> { deriv: Empty, errors: d1.errors <> d2.errors }
+
+repeatDeriv :: (String -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> RepeatCount -> Derivative
+repeatDeriv createError doValidate pattern (RepeatCount { min, max }) =
+    if maybe false (\m -> m <= 0) max then
+      { deriv: Empty, errors: Seq.singleton $ createError "Schema doesn't allow another repetition of this item or property." }
+    else
+      let
+        result = doValidate pattern
+        nextMax = countDown <$> max
+        nextCount = RepeatCount { min: countDown min, max: nextMax }
+        deriv = if maybe true (\m -> m > 0) nextMax then group result.deriv (Repeat pattern nextCount)
+                else Empty
+      in
+        result { deriv = deriv }
+  where
+    countDown :: Int -> Int
+    countDown i = if i > 0 then i - 1 else 0
 
 -- | nullable Pattern matches empty input (f.ex. in array content validation,
 -- | the array content is valid if derivative of last array element is nullable)
