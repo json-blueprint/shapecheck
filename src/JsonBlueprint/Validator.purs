@@ -5,20 +5,25 @@ module JsonBlueprint.Validator (
 ) where
 
 import Prelude
+import Data.Argonaut.Core as Json
 import Data.Int as Int
 import Data.Sequence as Seq
+import Data.Set as Set
+import Data.StrMap as StrMap
 import Data.String as Str
 import Data.String.Regex as Regex
-import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonString)
+import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonObject, foldJsonString)
 import Data.Array (mapWithIndex)
-import Data.Either (Either(..), fromRight)
-import Data.Foldable (foldl)
+import Data.Either (Either(..), fromRight, isRight)
+import Data.Foldable (foldl, intercalate)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Monoid (mempty)
 import Data.Sequence (Seq, empty)
+import Data.Set (Set)
+import Data.StrMap (StrMap)
 import Data.Tuple (Tuple(..))
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), RepeatCount(..), group)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, walk)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
 
@@ -71,16 +76,20 @@ validateValue path json pattern = case pattern of
         Just int -> validateNumeric props int mod
         Nothing -> fail "Expected Int but found decimal Number"
 
+    ArrayPattern contentP -> do
+      arr <- expectX "Array" foldJsonArray json
+      validateArray path arr contentP
+
+    Object contentP -> do
+      obj <- expectX "Object" foldJsonObject json
+      validateObject path obj contentP
+
     Choice _ _ ->
       let
         result = choiceDeriv aggError (validateValueDeriv path json) pattern
       in
         if isValid result then pure unit
         else Left result.errors
-
-    ArrayPattern contentP -> do
-      arr <- expectX "Array" foldJsonArray json
-      validateArray path arr contentP
 
     _ -> fail $ "Unexpected pattern type found in JSON value position (this is most likely a bug in the validator): " <> show pattern
   where
@@ -172,7 +181,7 @@ validateArray :: JsonPath -> Array Json -> Pattern -> Either ValidationErrors Un
 validateArray basePath is pattern =
     let
       zippedWithPath = mapWithIndex (\idx item -> { json: item, path: basePath \ IdxNode idx }) is
-      result = foldl validateArrayItem { deriv: pattern, errors: empty } zippedWithPath
+      result = foldl validateItem { deriv: pattern, errors: empty } zippedWithPath
     in
       if nullable result.deriv then deriv2Either result
       else
@@ -181,18 +190,13 @@ validateArray basePath is pattern =
           err = ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
         in Left $ Seq.snoc result.errors err
   where
-    deriv2Either :: Derivative -> Either ValidationErrors Unit
-    deriv2Either der =
-      if isValid der then pure unit
-      else Left der.errors
+    validateItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
+    validateItem { deriv, errors } { json, path } =
+      let result = validateArrayItem path json deriv
+      in { deriv: result.deriv, errors: errors <> result.errors }
 
-validateArrayItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
-validateArrayItem { deriv, errors } { json, path } =
-  let result = validateArrayItem' path json deriv
-  in { deriv: result.deriv, errors: errors <> result.errors }
-
-validateArrayItem' :: JsonPath -> Json -> Pattern -> Derivative
-validateArrayItem' path json pattern = case pattern of
+validateArrayItem :: JsonPath -> Json -> Pattern -> Derivative
+validateArrayItem path json pattern = case pattern of
     Group gHead gTail ->
       let headRes = recur gHead in
         if nullable gHead then
@@ -215,7 +219,7 @@ validateArrayItem' path json pattern = case pattern of
     other -> validateValueDeriv path json other
   where
     recur :: Pattern -> Derivative
-    recur = validateArrayItem' path json
+    recur = validateArrayItem path json
 
     error :: String -> ValidationError
     error message = ValidationError { path, pattern, message, children: Seq.empty }
@@ -226,6 +230,74 @@ validateArrayItem' path json pattern = case pattern of
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
 
+validateObject :: JsonPath -> StrMap Json -> Pattern -> Either ValidationErrors Unit
+validateObject basePath obj pattern =
+  let
+    props :: Array { name :: String, value :: Json, path :: JsonPath }
+    props  = (\(Tuple name value) -> { name, value, path: basePath \ KeyNode name }) <$> (StrMap.toUnfoldable obj)
+    result = foldl validateProp { deriv: pattern, errors: Seq.empty } props
+  in
+    if nullable result.deriv then deriv2Either result
+    else
+      let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames pattern)
+      in Left $ pure $ ValidationError { path: basePath, pattern, message, children: Seq.empty }
+
+validateProp :: Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
+validateProp { deriv, errors } prop =
+    case doValidate matchLiteralProps of
+      Just res -> { deriv: res.deriv, errors: errors <> res.errors }
+      Nothing ->
+        case doValidate matchWildcardProps of
+          Just res2 -> { deriv: res2.deriv, errors: errors <> res2.errors }
+          Nothing ->
+            let
+              validPropNames = propertyNames deriv
+              err = error $ "Unexpected property " <> show prop.name <> ". Possible property names: " <> (intercalate ", " $ show <$> validPropNames)
+            in
+              { deriv, errors: Seq.snoc errors err }
+  where
+    doValidate :: (String -> PropertyNamePattern -> Boolean) -> Maybe Derivative
+    doValidate propNameMatcher = validateObjectProperty (propNameMatcher prop.name) prop deriv
+
+    error :: String -> ValidationError
+    error message = ValidationError { path: prop.path, pattern: deriv, message, children: Seq.empty }
+
+    matchLiteralProps :: String -> PropertyNamePattern -> Boolean
+    matchLiteralProps actualName = case _ of
+      LiteralName expectedName -> actualName == expectedName
+      _ -> false
+
+    matchWildcardProps :: String -> PropertyNamePattern -> Boolean
+    matchWildcardProps actualName = case _ of
+      WildcardName props -> isRight $ validateValue mempty (Json.fromString actualName) (StringDataType props)
+      _ -> false
+
+validateObjectProperty :: forall a. (PropertyNamePattern -> Boolean) -> { value :: Json, path :: JsonPath | a } -> Pattern -> Maybe Derivative
+validateObjectProperty matchesPropName prop pattern = case pattern of
+    Property { name, value } ->
+      if matchesPropName name then pure $ validateValueDeriv prop.path prop.value value
+      else Nothing
+
+    other -> fail $ "Unexpected pattern type found when validating object content (this is most likely a bug in the validator): " <> show pattern
+  where
+    error :: String -> ValidationError
+    error message = ValidationError { path: prop.path, pattern, message, children: Seq.empty }
+
+    fail :: String -> Maybe Derivative
+    fail message = pure { deriv: Empty, errors: Seq.singleton $ error message }
+
+propertyNames :: Pattern -> Seq String
+propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
+  where
+    propertyNamePatterns :: Pattern -> Set PropertyNamePattern
+    propertyNamePatterns = walk shouldOpen transform
+      where
+        shouldOpen (Property _) = false
+        shouldOpen _            = true
+
+        transform (Property { name }) = Set.singleton name
+        transform _                   = mempty
+
 -- | when matching Pattern against part of complex JSON value (an array item or
 -- | a property of JSON object), it doesn't have to match fully - we can be left
 -- | with some remainder of the pattern which for subsequent items / properties -
@@ -235,6 +307,11 @@ type Derivative = { deriv :: Pattern, errors :: ValidationErrors }
 
 isValid :: Derivative -> Boolean
 isValid { errors } = Seq.null errors
+
+deriv2Either :: Derivative -> Either ValidationErrors Unit
+deriv2Either der =
+  if isValid der then pure unit
+  else Left der.errors
 
 choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
 choiceDeriv createError doValidate pattern =

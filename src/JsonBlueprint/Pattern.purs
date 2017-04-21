@@ -13,7 +13,8 @@ module JsonBlueprint.Pattern (
   PropertyNamePattern(..),
   propNameRequiresQuoting,
   RepeatCount(..),
-  StringDtProps(..)
+  StringDtProps(..),
+  walk
 ) where
 
 import Prelude
@@ -72,6 +73,9 @@ instance genericRegex :: Generic GenRegex where
         _           -> Nothing
   fromSpine _ = Nothing
 
+instance eqGenRegex :: Eq GenRegex where
+  eq = gEq
+
 -- | A numeric bound (minimum or maximum) indicating if it's inclusive or exclusive
 newtype Bound a = Bound { value :: a, inclusive :: Boolean }
 
@@ -96,6 +100,17 @@ instance showPropertyNamePattern :: Show PropertyNamePattern where
   show (WildcardName props) = show $ StringDataType props
 
 derive instance genericPropertyNamePattern :: Generic PropertyNamePattern
+
+derive instance eqPropertyNamePattern :: Eq PropertyNamePattern
+
+instance ordPropertyNamePattern :: Ord PropertyNamePattern where
+  compare (LiteralName l1) (LiteralName l2) = compare l1 l2
+  compare (LiteralName l1) _                = LT
+  compare _                (LiteralName l2) = GT
+  compare (WildcardName { pattern: Just (GenRegex r1) }) (WildcardName { pattern: Just (GenRegex r2) }) = compare (source r1) (source r2)
+  compare (WildcardName { pattern: Just _ }) (WildcardName { pattern: Nothing }) = LT
+  compare (WildcardName { pattern: Nothing }) (WildcardName { pattern: Just _ }) = GT
+  compare _ _ = EQ
 
 data Pattern = Empty
              | Any
@@ -200,7 +215,7 @@ boundProp baseName optBound = do
 
 foldGroup :: forall o. (o -> Pattern -> o) -> o -> Pattern -> o
 foldGroup f accu = case _ of
-  Group p1 p2 -> foldGroup f (foldChoice f accu p1) p2
+  Group p1 p2 -> foldGroup f (foldGroup f accu p1) p2
   other -> f accu other
 
 flattenGroup :: Pattern -> Seq Pattern
@@ -213,6 +228,37 @@ foldChoice f accu = case _ of
 
 flattenChoice :: Pattern -> Seq Pattern
 flattenChoice = foldChoice Seq.snoc Seq.empty
+
+walk :: forall s. Semigroup s => (Pattern -> Boolean) -> (Pattern -> s) -> Pattern -> s
+walk shouldOpen f pattern = case pattern of
+    g@Group g1 g2 ->
+      if shouldOpen g then (recur g1) <> (recur g2)
+      else f g
+
+    c@Choice c1 c2 ->
+      if shouldOpen c then (recur c1) <> (recur c2)
+      else f c
+
+    r@Repeat p _ ->
+      if shouldOpen r then recur p
+      else f r
+
+    a@ArrayPattern p ->
+      if shouldOpen a then recur p
+      else f a
+
+    o@Object p ->
+      if shouldOpen o then recur p
+      else f o
+
+    p@Property { value } ->
+      if shouldOpen p then recur value
+      else f p
+
+    other -> f other
+  where
+    recur :: Pattern -> s
+    recur = walk shouldOpen f
 
 derive instance genericPattern :: Generic Pattern
 
