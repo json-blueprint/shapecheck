@@ -17,12 +17,13 @@ module JsonBlueprint.Pattern (
 ) where
 
 import Prelude
+import Data.Int as Int
 import Data.Sequence as Seq
 import Data.String as Str
 import Data.Array (catMaybes, intercalate)
 import Data.Either (Either(..))
 import Data.Generic (class Generic, GenericSignature(..), GenericSpine(..), gEq)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Sequence (Seq)
 import Data.String.Regex (Regex, flags, parseFlags, renderFlags, regex, source, test)
 import Data.String.Regex.Flags (ignoreCase)
@@ -139,7 +140,7 @@ instance showPattern :: Show Pattern where
   show (BooleanLiteral b)  = show b
   show BooleanDataType     = "Boolean"
   show (StringLiteral str) = show str
-  show (NumberLiteral num) = show num
+  show (NumberLiteral num) = maybe (show num) show $ Int.fromNumber num
   show (IntDataType ps)    = "Int" <> showNumericDtProps ps
   show (NumberDataType ps) = "Number" <> showNumericDtProps ps
 
