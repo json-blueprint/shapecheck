@@ -264,8 +264,8 @@ repeatDeriv createError doValidate pattern (RepeatCount { min, max }) =
         result = doValidate pattern
         nextMax = countDown <$> max
         nextCount = RepeatCount { min: countDown min, max: nextMax }
-        deriv = if maybe true (\m -> m > 0) nextMax then group result.deriv (Repeat pattern nextCount)
-                else Empty
+        repeatTail = if maybe true (\m -> m > 0) nextMax then Repeat pattern nextCount else Empty
+        deriv = group result.deriv repeatTail
       in
         result { deriv = deriv }
   where
