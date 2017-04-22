@@ -86,7 +86,7 @@ validateValue path json pattern = case pattern of
 
     Choice _ _ ->
       let
-        result = choiceDeriv aggError (validateValueDeriv path json) pattern
+        result = simpleChoiceDeriv aggError (validateValueDeriv path json) pattern
       in
         if isValid result then pure unit
         else Left result.errors
@@ -97,7 +97,7 @@ validateValue path json pattern = case pattern of
     fail msg = Left $ pure $ error msg
 
     error :: String -> ValidationError
-    error message = ValidationError { path, pattern, message, children: Seq.empty }
+    error = (flip aggError) Seq.empty
 
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
@@ -210,9 +210,9 @@ validateArrayItem path json pattern = case pattern of
         else
           headRes { deriv = group headRes.deriv gTail }
 
-    ch@(Choice _ _) -> choiceDeriv aggError recur pattern
+    ch@(Choice _ _) -> simpleChoiceDeriv aggError recur pattern
 
-    Repeat p count -> repeatDeriv error recur p count
+    Repeat p count -> simpleRepeatDeriv error recur p count
 
     Empty -> fail "Expected end of array"
 
@@ -222,13 +222,13 @@ validateArrayItem path json pattern = case pattern of
     recur = validateArrayItem path json
 
     error :: String -> ValidationError
-    error message = ValidationError { path, pattern, message, children: Seq.empty }
-
-    fail :: String -> Derivative
-    fail message = { deriv: Empty, errors: Seq.singleton $ error message }
+    error = (flip aggError) Seq.empty
 
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
+
+    fail :: String -> Derivative
+    fail message = { deriv: Empty, errors: Seq.singleton $ error message }
 
 validateObject :: JsonPath -> StrMap Json -> Pattern -> Either ValidationErrors Unit
 validateObject basePath obj pattern =
@@ -239,8 +239,8 @@ validateObject basePath obj pattern =
   in
     if nullable result.deriv then deriv2Either result
     else
-      let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames pattern)
-      in Left $ pure $ ValidationError { path: basePath, pattern, message, children: Seq.empty }
+      let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames result.deriv)
+      in Left $ pure $ ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
 
 validateProp :: Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
 validateProp { deriv, errors } prop =
@@ -278,13 +278,33 @@ validateObjectProperty matchesPropName prop pattern = case pattern of
       if matchesPropName name then pure $ validateValueDeriv prop.path prop.value value
       else Nothing
 
+    Group p1 p2 ->
+      case recur p1 of
+        Just p1Res -> Just { deriv: group p1Res.deriv p2, errors: p1Res.errors }
+        Nothing ->
+          case recur p2 of
+            Just p2Res -> Just { deriv: group p1 p2Res.deriv, errors: p2Res.errors }
+            Nothing -> Nothing
+
+    ch@Choice _ _ -> choiceDeriv aggError recur ch
+
+    r@Repeat p c -> repeatDeriv error recur p c
+
+    Empty -> fail $ "Unexpected property. Schema doesn't allow any additional properties."
+
     other -> fail $ "Unexpected pattern type found when validating object content (this is most likely a bug in the validator): " <> show pattern
   where
     error :: String -> ValidationError
-    error message = ValidationError { path: prop.path, pattern, message, children: Seq.empty }
+    error = (flip aggError) Seq.empty
+
+    aggError :: String -> ValidationErrors -> ValidationError
+    aggError message children = ValidationError { path: prop.path, pattern, message, children }
 
     fail :: String -> Maybe Derivative
     fail message = pure { deriv: Empty, errors: Seq.singleton $ error message }
+
+    recur :: Pattern -> Maybe Derivative
+    recur = validateObjectProperty matchesPropName prop
 
 propertyNames :: Pattern -> Seq String
 propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
@@ -313,32 +333,51 @@ deriv2Either der =
   if isValid der then pure unit
   else Left der.errors
 
-choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
-choiceDeriv createError doValidate pattern =
-  let result = choiceDeriv' doValidate pattern
-  in
-    if isValid result then result
-    else { deriv: Empty, errors: Seq.singleton $ createError "None of allowed patterns matches JSON value" result.errors }
+simpleChoiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
+simpleChoiceDeriv createError doValidate pattern =
+  case choiceDeriv createError (Just <<< doValidate) pattern of
+    Just deriv -> deriv
+    Nothing -> { deriv: Empty, errors: empty }
 
-choiceDeriv' :: (Pattern -> Derivative) -> Pattern -> Derivative
+choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
+choiceDeriv createError doValidate pattern =
+    let result = choiceDeriv' doValidate pattern
+    in wrapErrors <$> result
+  where
+    wrapErrors :: Derivative -> Derivative
+    wrapErrors res =
+      if isValid res || Seq.length res.errors <= 1 then res
+      else { deriv: Empty, errors: Seq.singleton $ createError "None of allowed patterns matches JSON value" res.errors }
+
+choiceDeriv' :: (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
 choiceDeriv' doValidate = case _ of
     Choice p1 p2 -> appendDeriv (choiceDeriv' doValidate p1) (choiceDeriv' doValidate p2)
     other -> doValidate other
   where
-    appendDeriv :: Derivative -> Derivative -> Derivative
-    appendDeriv d1 d2 = case Tuple (isValid d1) (isValid d2) of
-      Tuple true  true  -> { deriv: Choice d1.deriv d2.deriv, errors: empty }
-      Tuple true  false -> d1
-      Tuple false true  -> d2
-      Tuple false false -> { deriv: Empty, errors: d1.errors <> d2.errors }
+    appendDeriv :: Maybe Derivative -> Maybe Derivative -> Maybe Derivative
+    appendDeriv Nothing    Nothing    = Nothing
+    appendDeriv j@(Just _) Nothing    = j
+    appendDeriv Nothing    j@(Just _) = j
+    appendDeriv (Just d1)  (Just d2)  = Just
+      case Tuple (isValid d1) (isValid d2) of
+        Tuple true  true  -> { deriv: Choice d1.deriv d2.deriv, errors: (empty :: ValidationErrors) }
+        Tuple true  false -> d1
+        Tuple false true  -> d2
+        Tuple false false -> { deriv: Empty, errors: d1.errors <> d2.errors }
 
-repeatDeriv :: (String -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> RepeatCount -> Derivative
+simpleRepeatDeriv :: (String -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> RepeatCount -> Derivative
+simpleRepeatDeriv createError doValidate pattern repeatCount =
+  case repeatDeriv createError (Just <<< doValidate) pattern repeatCount of
+    Just d -> d
+    Nothing -> { deriv: Empty, errors: empty }
+
+repeatDeriv :: (String -> ValidationError) -> (Pattern -> Maybe Derivative) -> Pattern -> RepeatCount -> Maybe Derivative
 repeatDeriv createError doValidate pattern (RepeatCount { min, max }) =
+  (doValidate pattern) <#> \result ->
     if maybe false (\m -> m <= 0) max then
       { deriv: Empty, errors: Seq.singleton $ createError "Schema doesn't allow another repetition of this item or property." }
     else
       let
-        result = doValidate pattern
         nextMax = countDown <$> max
         nextCount = RepeatCount { min: countDown min, max: nextMax }
         repeatTail = if maybe true (\m -> m > 0) nextMax then Repeat pattern nextCount else Empty
