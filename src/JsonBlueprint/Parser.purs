@@ -25,7 +25,7 @@ import Data.Maybe (Maybe(..), fromJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), emptyNumericDtProps, emptyStringDtProps, group)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), StringDtProps, emptyNumericDtProps, emptyStringDtProps, group)
 import JsonBlueprint.JsonPath (JsonPath(..), JsonPathNode(..))
 import Partial.Unsafe (unsafePartial)
 
@@ -218,14 +218,14 @@ makeRegex pattern flags = case regex pattern flags of
   Right re  -> pure $ GenRegex re
   Left err -> expected fail err
 
-stringDataType :: Parser Char Pattern
-stringDataType = do
+stringDataTypeProps :: Parser Char StringDtProps
+stringDataTypeProps = do
     S.string "String"
     ps <- dtProps emptyStringDtProps [
       dtProp "minLength" nonNegativeInt (\i ps -> ps { minLength = Just i }),
       dtProp "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i }),
       dtProp "pattern"   regexProp      (\r ps -> ps { pattern = Just r })]
-    pure $ StringDataType ps
+    pure ps
   where
     regexFromStringPattern :: Parser Char GenRegex
     regexFromStringPattern = do
@@ -234,6 +234,9 @@ stringDataType = do
 
     regexProp :: Parser Char GenRegex
     regexProp = regexFromStringPattern <|> regexLiteral
+
+stringDataType :: Parser Char Pattern
+stringDataType = StringDataType <$> stringDataTypeProps
 
 groupParser :: Parser Char Pattern -> Parser Char Pattern
 groupParser itemParser = commaSeparated '(' itemParser ')' (foldl group Empty)
@@ -323,11 +326,14 @@ property = do
       value <- valuePatternParser
       pure $ Property { name, value }
   where
-    quotedPropName :: Parser Char PropertyNamePattern
-    quotedPropName = LiteralName <$> stringLiteral'
+    quotedProp :: Parser Char PropertyNamePattern
+    quotedProp = LiteralName <$> stringLiteral'
+
+    wildcardProp :: Parser Char PropertyNamePattern
+    wildcardProp = WildcardName <$> stringDataTypeProps
 
     propName :: Parser Char PropertyNamePattern
-    propName = (LiteralName <$> simplePropName) <|> quotedPropName
+    propName =  wildcardProp <|> (LiteralName <$> simplePropName) <|> quotedProp
 
 object :: Parser Char Pattern
 object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
