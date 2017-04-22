@@ -58,7 +58,8 @@ validateValue path json pattern = case pattern of
 
     StringLiteral str -> validateLiteral str (expectString json)
 
-    NumberLiteral num -> validateLiteral num (expectNumber json)
+    -- show for Number prints even integers as decimals, so we keep it wrapped in NumberLiteral which has better show
+    num@NumberLiteral _ -> validateLiteral num (NumberLiteral <$> expectNumber json)
 
     StringDataType { minLength, maxLength, pattern: regex } -> do
       actual <- expectString json
@@ -344,10 +345,25 @@ choiceDeriv createError doValidate pattern =
     let result = choiceDeriv' doValidate pattern
     in wrapErrors <$> result
   where
+    isLiteral :: Pattern -> Boolean
+    isLiteral (BooleanLiteral _) = true
+    isLiteral (StringLiteral _)  = true
+    isLiteral (NumberLiteral _)  = true
+    isLiteral Null               = true
+    isLiteral _                  = false
+
     wrapErrors :: Derivative -> Derivative
     wrapErrors res =
       if isValid res || Seq.length res.errors <= 1 then res
-      else { deriv: Empty, errors: Seq.singleton $ createError "None of allowed patterns matches JSON value" res.errors }
+      else
+        let
+          errPs = (\(ValidationError props) -> props.pattern) <$> res.errors
+          err = if foldl (&&) true (isLiteral <$> errPs) then
+                  createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) empty
+                else
+                  createError "None of allowed patterns matches JSON value" res.errors
+        in
+          { deriv: Empty, errors: pure err }
 
 choiceDeriv' :: (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
 choiceDeriv' doValidate = case _ of
