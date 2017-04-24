@@ -24,6 +24,7 @@ import Data.StrMap (StrMap)
 import Data.Tuple (Tuple(..))
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
 import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, walk)
+import JsonBlueprint.Schema (Schema, lookupPattern)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
 
@@ -39,15 +40,30 @@ instance showValidationError :: Show ValidationError where
 
 type ValidationErrors = Seq ValidationError
 
-validate :: Json -> Pattern -> Either ValidationErrors Unit
-validate = validateValue mempty
+-- | when matching Pattern against part of complex JSON value (an array item or
+-- | a property of JSON object), it doesn't have to match fully - we can be left
+-- | with some remainder of the pattern which for subsequent items / properties -
+-- | this is called a "derivative" of the Pattern with respect to the given
+-- | JSON node
+type Derivative = { deriv :: Pattern, errors :: ValidationErrors }
+
+isValid :: Derivative -> Boolean
+isValid { errors } = Seq.null errors
+
+deriv2Either :: Derivative -> Either ValidationErrors Unit
+deriv2Either der =
+  if isValid der then pure unit
+  else Left der.errors
+
+validate :: Schema -> Json -> Pattern -> Either ValidationErrors Unit
+validate schema = validateValue schema mempty
 
 -- | validates given JSON value (null / Boolean / String / Number / Array / Object)
 -- | against the given pattern; this does not produce a derivative each of these
 -- | values have to fully match given pattern (unlike validation of array / object
 -- | content, where the pattern usually matches each item / property only partially)
-validateValue :: JsonPath -> Json -> Pattern -> Either ValidationErrors Unit
-validateValue path json pattern = case pattern of
+validateValue :: Schema -> JsonPath -> Json -> Pattern -> Either ValidationErrors Unit
+validateValue schema path json pattern = case pattern of
     Any -> pure unit
 
     Null -> const unit <$> expectX "null" foldJsonNull json
@@ -79,18 +95,22 @@ validateValue path json pattern = case pattern of
 
     ArrayPattern contentP -> do
       arr <- expectX "Array" foldJsonArray json
-      validateArray path arr contentP
+      validateArray schema path arr contentP
 
     Object contentP -> do
       obj <- expectX "Object" foldJsonObject json
-      validateObject path obj contentP
+      validateObject schema path obj contentP
 
     Choice _ _ ->
       let
-        result = simpleChoiceDeriv aggError (validateValueDeriv path json) pattern
+        result = simpleChoiceDeriv aggError (validateValueDeriv schema path json) pattern
       in
         if isValid result then pure unit
         else Left result.errors
+
+    NamedPattern name -> case lookupPattern name schema of
+      Just p -> validateValue schema path json p
+      Nothing -> fail $ "Pattern with name `" <> name <> "` not found in schema."
 
     _ -> fail $ "Unexpected pattern type found in JSON value position (this is most likely a bug in the validator): " <> show pattern
   where
@@ -172,14 +192,14 @@ validateValue path json pattern = case pattern of
       effRegexStr' = if charAtEq ((Str.length effRegexStr) - 1) '$' effRegexStr then effRegexStr else effRegexStr <> "$"
       effRegex = unsafePartial $ fromRight $ Regex.regex effRegexStr' (Regex.flags regex)
 
-validateValueDeriv :: JsonPath -> Json -> Pattern -> Derivative
-validateValueDeriv path json = result2Deriv <<< (validateValue path json) where
+validateValueDeriv :: Schema -> JsonPath -> Json -> Pattern -> Derivative
+validateValueDeriv schema path json = result2Deriv <<< (validateValue schema path json) where
   result2Deriv :: Either ValidationErrors Unit -> Derivative
   result2Deriv (Right _) = { deriv: Empty, errors: empty }
   result2Deriv (Left es) = { deriv: Empty, errors: es }
 
-validateArray :: JsonPath -> Array Json -> Pattern -> Either ValidationErrors Unit
-validateArray basePath is pattern =
+validateArray :: Schema -> JsonPath -> Array Json -> Pattern -> Either ValidationErrors Unit
+validateArray schema basePath is pattern =
     let
       zippedWithPath = mapWithIndex (\idx item -> { json: item, path: basePath \ IdxNode idx }) is
       result = foldl validateItem { deriv: pattern, errors: empty } zippedWithPath
@@ -193,11 +213,11 @@ validateArray basePath is pattern =
   where
     validateItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
     validateItem { deriv, errors } { json, path } =
-      let result = validateArrayItem path json deriv
+      let result = validateArrayItem schema path json deriv
       in { deriv: result.deriv, errors: errors <> result.errors }
 
-validateArrayItem :: JsonPath -> Json -> Pattern -> Derivative
-validateArrayItem path json pattern = case pattern of
+validateArrayItem :: Schema -> JsonPath -> Json -> Pattern -> Derivative
+validateArrayItem schema path json pattern = case pattern of
     Group gHead gTail ->
       let headRes = recur gHead in
         if nullable gHead then
@@ -211,16 +231,16 @@ validateArrayItem path json pattern = case pattern of
         else
           headRes { deriv = group headRes.deriv gTail }
 
-    ch@(Choice _ _) -> simpleChoiceDeriv aggError recur pattern
+    ch@(Choice _ _) -> simpleChoiceDeriv aggError recur ch
 
     Repeat p count -> simpleRepeatDeriv error recur p count
 
     Empty -> fail "Expected end of array"
 
-    other -> validateValueDeriv path json other
+    other -> validateValueDeriv schema path json other
   where
     recur :: Pattern -> Derivative
-    recur = validateArrayItem path json
+    recur = validateArrayItem schema path json
 
     error :: String -> ValidationError
     error = (flip aggError) Seq.empty
@@ -231,20 +251,20 @@ validateArrayItem path json pattern = case pattern of
     fail :: String -> Derivative
     fail message = { deriv: Empty, errors: Seq.singleton $ error message }
 
-validateObject :: JsonPath -> StrMap Json -> Pattern -> Either ValidationErrors Unit
-validateObject basePath obj pattern =
+validateObject :: Schema -> JsonPath -> StrMap Json -> Pattern -> Either ValidationErrors Unit
+validateObject schema basePath obj pattern =
   let
     props :: Array { name :: String, value :: Json, path :: JsonPath }
     props  = (\(Tuple name value) -> { name, value, path: basePath \ KeyNode name }) <$> (StrMap.toUnfoldable obj)
-    result = foldl validateProp { deriv: pattern, errors: Seq.empty } props
+    result = foldl (validateObjectProperty schema) { deriv: pattern, errors: Seq.empty } props
   in
     if nullable result.deriv then deriv2Either result
     else
       let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames result.deriv)
       in Left $ pure $ ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
 
-validateProp :: Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
-validateProp { deriv, errors } prop =
+validateObjectProperty :: Schema -> Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
+validateObjectProperty schema { deriv, errors } prop =
     case doValidate matchLiteralProps of
       Just res -> { deriv: res.deriv, errors: errors <> res.errors }
       Nothing ->
@@ -258,7 +278,7 @@ validateProp { deriv, errors } prop =
               { deriv, errors: Seq.snoc errors err }
   where
     doValidate :: (String -> PropertyNamePattern -> Boolean) -> Maybe Derivative
-    doValidate propNameMatcher = validateObjectProperty (propNameMatcher prop.name) prop deriv
+    doValidate propNameMatcher = validateObjectProperty' schema (propNameMatcher prop.name) prop deriv
 
     error :: String -> ValidationError
     error message = ValidationError { path: prop.path, pattern: deriv, message, children: Seq.empty }
@@ -270,13 +290,13 @@ validateProp { deriv, errors } prop =
 
     matchWildcardProps :: String -> PropertyNamePattern -> Boolean
     matchWildcardProps actualName = case _ of
-      WildcardName props -> isRight $ validateValue mempty (Json.fromString actualName) (StringDataType props)
+      WildcardName props -> isRight $ validateValue schema mempty (Json.fromString actualName) (StringDataType props)
       _ -> false
 
-validateObjectProperty :: forall a. (PropertyNamePattern -> Boolean) -> { value :: Json, path :: JsonPath | a } -> Pattern -> Maybe Derivative
-validateObjectProperty matchesPropName prop pattern = case pattern of
+validateObjectProperty' :: forall a. Schema -> (PropertyNamePattern -> Boolean) -> { value :: Json, path :: JsonPath | a } -> Pattern -> Maybe Derivative
+validateObjectProperty' schema matchesPropName prop pattern = case pattern of
     Property { name, value } ->
-      if matchesPropName name then pure $ validateValueDeriv prop.path prop.value value
+      if matchesPropName name then pure $ validateValueDeriv schema prop.path prop.value value
       else Nothing
 
     Group p1 p2 ->
@@ -305,7 +325,7 @@ validateObjectProperty matchesPropName prop pattern = case pattern of
     fail message = pure { deriv: Empty, errors: Seq.singleton $ error message }
 
     recur :: Pattern -> Maybe Derivative
-    recur = validateObjectProperty matchesPropName prop
+    recur = validateObjectProperty' schema matchesPropName prop
 
 propertyNames :: Pattern -> Seq String
 propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
@@ -318,21 +338,6 @@ propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatt
 
         transform (Property { name }) = Set.singleton name
         transform _                   = mempty
-
--- | when matching Pattern against part of complex JSON value (an array item or
--- | a property of JSON object), it doesn't have to match fully - we can be left
--- | with some remainder of the pattern which for subsequent items / properties -
--- | this is called a "derivative" of the Pattern with respect to the given
--- | JSON node
-type Derivative = { deriv :: Pattern, errors :: ValidationErrors }
-
-isValid :: Derivative -> Boolean
-isValid { errors } = Seq.null errors
-
-deriv2Either :: Derivative -> Either ValidationErrors Unit
-deriv2Either der =
-  if isValid der then pure unit
-  else Left der.errors
 
 simpleChoiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
 simpleChoiceDeriv createError doValidate pattern =

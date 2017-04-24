@@ -1,4 +1,5 @@
 module JsonBlueprint.Parser (
+  schemaParser,
   valuePatternParser,
   jsonPathParser
 ) where
@@ -8,6 +9,7 @@ import Data.Argonaut.Core as Json
 import Data.Eulalie.Char as C
 import Data.Eulalie.String as S
 import Data.Sequence as Seq
+import JsonBlueprint.Schema as Schema
 import Control.Alt ((<|>))
 import Data.Argonaut.Parser (jsonParser)
 import Data.Array (fromFoldable)
@@ -21,12 +23,13 @@ import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
 import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
-import Data.Maybe (Maybe(..), fromJust)
+import Data.Maybe (Maybe(..), fromJust, isJust)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), StringDtProps, emptyNumericDtProps, emptyStringDtProps, group)
 import JsonBlueprint.JsonPath (JsonPath(..), JsonPathNode(..))
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), StringDtProps, emptyNumericDtProps, emptyStringDtProps, group)
+import JsonBlueprint.Schema (Schema)
 import Partial.Unsafe (unsafePartial)
 
 lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
@@ -309,8 +312,8 @@ arrayPattern = commaSeparated '[' arrayContent ']' (ArrayPattern <<< list2Group)
   arrayContent :: Parser Char Pattern
   arrayContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceArrayContent)
 
-simplePropName :: Parser Char String
-simplePropName = do
+identifier :: Parser Char String
+identifier = do
   c <- sat \c -> c == '_' || ((toLower c) >= 'a' && (toLower c) <= 'z')
   cut do
     cs <- many C.letter
@@ -333,7 +336,7 @@ property = do
     wildcardProp = WildcardName <$> stringDataTypeProps
 
     propName :: Parser Char PropertyNamePattern
-    propName =  wildcardProp <|> (LiteralName <$> simplePropName) <|> quotedProp
+    propName =  wildcardProp <|> (LiteralName <$> identifier) <|> quotedProp
 
 object :: Parser Char Pattern
 object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
@@ -348,6 +351,11 @@ object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
   objectContent :: Parser Char Pattern
   objectContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
 
+namedPatternRef :: Parser Char Pattern
+namedPatternRef = do
+  C.char '$'
+  cut $ NamedPattern <$> identifier
+
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
     anyValue <|>
@@ -360,6 +368,7 @@ nonChoiceValuePattern =
     intDataType <|>
     numberDataType <|>
     regexStringShorthand <|>
+    namedPatternRef <|>
     lazyParser (defer \_ -> arrayPattern) <|>
     lazyParser (defer \_ -> object)
   where
@@ -376,10 +385,30 @@ nonChoiceValuePattern =
 valuePatternParser :: Parser Char Pattern
 valuePatternParser = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
 
+namedPatternDefinition :: Parser Char { name :: String, pattern :: Pattern }
+namedPatternDefinition = do
+  name <- identifier
+  S.spaces
+  C.char '='
+  cut do
+    S.spaces
+    pattern <- valuePatternParser
+    pure { name, pattern }
+
+schemaParser :: Parser Char Schema
+schemaParser = (sepBy S.spaces namedPatternDefinition) >>= toSchema where
+  appendPattern :: Parser Char Schema -> { name :: String, pattern :: Pattern } -> Parser Char Schema
+  appendPattern schemaP { name, pattern } = schemaP >>= \schema ->
+    if isJust $ Schema.lookupPattern name schema then expected fail $ "Multiple definitions of pattern `" <> name <> "` found in schema."
+    else pure $ Schema.add name pattern schema
+
+  toSchema :: List { name :: String, pattern :: Pattern } -> Parser Char Schema
+  toSchema = foldl appendPattern (pure Schema.empty)
+
 jsonPathParser :: Parser Char JsonPath
 jsonPathParser = do
     C.char '.'
-    ns <- sepBy (C.char '.') $ idxNode <|> (KeyNode <$> simplePropName) <|> keyNode
+    ns <- sepBy (C.char '.') $ idxNode <|> (KeyNode <$> identifier) <|> keyNode
     pure $ JsonPath $ Seq.fromFoldable ns
   where
     idxNode :: Parser Char JsonPathNode

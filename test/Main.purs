@@ -2,6 +2,7 @@ module Test.Main where
 
 import Prelude
 import Data.Sequence as Seq
+import JsonBlueprint.Schema as Schema
 import Node.FS as F
 import Node.FS.Aff as FS
 import Test.Unit.Assert as Assert
@@ -82,7 +83,7 @@ loadSpecs path =
           failure ("incorrect validation of sample document '" <> doc.name <> "':\n" <> intercalate "\n" problems)
       where
         actualErrors :: Seq ValidationError
-        actualErrors = case validate doc.json pattern of
+        actualErrors = case validate Schema.empty doc.json pattern of
           Left errs -> errs
           Right _ -> Seq.empty
 

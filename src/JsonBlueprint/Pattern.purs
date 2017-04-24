@@ -128,6 +128,7 @@ data Pattern = Empty
              | ArrayPattern Pattern
              | Property { name :: PropertyNamePattern, value :: Pattern }
              | Object Pattern
+             | NamedPattern String
 
 type StringDtProps = { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
 emptyStringDtProps :: StringDtProps
@@ -187,6 +188,7 @@ instance showPattern :: Show Pattern where
   show (Object Empty)             = "{}"
   show (Object g@(Group _ _))     = "{\n  " <> indent (intercalate ",\n" (show <$> (flattenGroup g))) <> "\n}"
   show (Object p)                 = "{\n  " <> indent (show p) <> "\n}"
+  show (NamedPattern name)        = "$" <> name
 
 indent :: String -> String
 indent = Str.replaceAll (Str.Pattern "\n") (Str.Replacement "\n  ")

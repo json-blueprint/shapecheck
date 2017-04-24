@@ -7,7 +7,8 @@ import Prelude
 import Data.Array as Arr
 import Data.String as Str
 import JsonBlueprint.Validator as Validator
-import Control.Monad.Eff.Exception (error, throwException)
+import Control.Monad.Eff (Eff)
+import Control.Monad.Eff.Exception (EXCEPTION, error, throwException)
 import Control.Monad.Eff.Unsafe (unsafePerformEff)
 import Data.Argonaut.Core (Json)
 import Data.Either (Either(..))
@@ -15,30 +16,43 @@ import Data.Eulalie.Parser (eof, parse, Parser)
 import Data.Eulalie.Result (ParseResult(..))
 import Data.Eulalie.Stream (stream, Stream)
 import Data.Foldable (intercalate)
-import JsonBlueprint.Parser (valuePatternParser)
-import JsonBlueprint.Pattern (Pattern)
+import Data.Function.Uncurried (Fn2, mkFn2)
+import Data.Maybe (Maybe(..))
+import JsonBlueprint.Parser (schemaParser)
+import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, showProblems, validateAndSimplify)
 import JsonBlueprint.Validator (ValidationError(..), ValidationErrors)
 
-type Schema = String
+type SchemaString = String
 
 newtype JsValidationError = JsValidationError { message :: String, path :: String, pattern :: String, children :: Array JsValidationError }
 type JsValidationResult = { valid :: Boolean, errors :: Array JsValidationError }
 
-type JsValidator = { validate :: Json -> JsValidationResult }
+type JsValidator = { validate :: Fn2 PatternDefName Json JsValidationResult }
 
-createValidator :: Schema -> JsValidator
+createValidator :: SchemaString -> JsValidator
 createValidator schema = case createValidator' schema of
   Right validator -> validator
   Left errMsg -> unsafePerformEff $ throwException $ error errMsg
 
-createValidator' :: Schema -> Either String JsValidator
-createValidator' schema = do
-  pattern <- parseSchema schema
-  pure { validate: validate pattern }
+createValidator' :: SchemaString -> Either String JsValidator
+createValidator' schemaStr = do
+    schema <- parseSchema schemaStr
+    simplified <- checkSchema schema
+    pure { validate: mkFn2 (unsafeValidate simplified) }
+  where
+    checkSchema :: Schema -> Either String Schema
+    checkSchema schema = case validateAndSimplify schema of
+      Right s -> Right s
+      Left problems -> Left $ "Supplied schema is invalid: \n" <> showProblems problems
 
-validate :: Pattern -> Json -> JsValidationResult
-validate schema json =
-    res2Js $ Validator.validate json schema
+unsafeValidate :: Schema -> PatternDefName -> Json -> JsValidationResult
+unsafeValidate schema patternName json = unsafePerformEff $ validate schema patternName json
+
+validate :: forall eff. Schema -> PatternDefName -> Json -> Eff (err :: EXCEPTION | eff) JsValidationResult
+validate schema patternName json =
+    case lookupPattern patternName schema of
+      Just pattern -> pure $ res2Js $ Validator.validate schema json pattern
+      Nothing -> throwException $ error $ "No pattern with name `" <> patternName <> "` found in the schema."
   where
     res2Js :: Either ValidationErrors Unit -> JsValidationResult
     res2Js (Right _) = valid
@@ -54,7 +68,7 @@ validate schema json =
     valid :: JsValidationResult
     valid = { valid: true, errors: [] }
 
-parseSchema :: Schema -> Either String Pattern
+parseSchema :: SchemaString -> Either String Schema
 parseSchema inputStr =
     case parse consumeInputParser input of
       Error({expected}) -> Left $ "failed to parse schema: " <> intercalate "; " expected
@@ -63,8 +77,8 @@ parseSchema inputStr =
     input :: Stream Char
     input = stream $ Str.toCharArray inputStr
 
-    consumeInputParser :: Parser Char Pattern
+    consumeInputParser :: Parser Char Schema
     consumeInputParser = do
-      val <- valuePatternParser
+      val <- schemaParser
       eof
       pure val
