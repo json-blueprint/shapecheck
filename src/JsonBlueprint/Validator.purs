@@ -12,16 +12,17 @@ import Data.Set as Set
 import Data.StrMap as StrMap
 import Data.String as Str
 import Data.String.Regex as Regex
+import JsonBlueprint.JsonPath as JsonPath
 import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonObject, foldJsonString)
 import Data.Array (mapWithIndex)
 import Data.Either (Either(..), fromRight, isRight)
 import Data.Foldable (foldl, intercalate)
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), fromJust, maybe)
 import Data.Monoid (mempty)
 import Data.Sequence (Seq, empty)
 import Data.Set (Set)
 import Data.StrMap (StrMap)
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple(..), snd)
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
 import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, walk)
 import JsonBlueprint.Schema (Schema, lookupPattern)
@@ -357,16 +358,31 @@ choiceDeriv createError doValidate pattern =
     isLiteral Null               = true
     isLiteral _                  = false
 
+    mostSpecific :: ValidationErrors -> ValidationErrors
+    mostSpecific errors =
+        let res = foldl foldF (Tuple 0 (empty :: ValidationErrors)) errors
+        in snd res
+      where
+        foldF :: Tuple Int ValidationErrors -> ValidationError -> Tuple Int ValidationErrors
+        foldF acc@(Tuple i es) e@(ValidationError { path }) =
+          case JsonPath.length path of
+            l | l < i -> acc
+              | l == i -> Tuple i (Seq.snoc es e)
+              | otherwise -> Tuple l (pure e)
+
     wrapErrors :: Derivative -> Derivative
     wrapErrors res =
       if isValid res || Seq.length res.errors <= 1 then res
       else
         let
-          errPs = (\(ValidationError props) -> props.pattern) <$> res.errors
-          err = if foldl (&&) true (isLiteral <$> errPs) then
+          specific = mostSpecific res.errors
+          errPs = (\(ValidationError props) -> props.pattern) <$> specific
+          err = if Seq.length specific == 1 then
+                  unsafePartial $ fromJust $ Seq.head specific
+                else if foldl (&&) true (isLiteral <$> errPs) then
                   createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) empty
                 else
-                  createError "None of allowed patterns matches JSON value" res.errors
+                  createError "None of allowed patterns matches JSON value" specific
         in
           { deriv: Empty, errors: pure err }
 

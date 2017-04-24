@@ -2,9 +2,11 @@ module JsonBlueprint.JsonPath (
   JsonPath(..),
   JsonPathNode(..),
   appendNode,
+  length,
   (\)) where
 
 import Prelude
+import Data.Sequence as Seq
 import Data.Foldable (intercalate)
 import Data.Monoid (class Monoid, mempty)
 import Data.Sequence (Seq, snoc)
@@ -29,6 +31,9 @@ appendNode :: JsonPath -> JsonPathNode -> JsonPath
 appendNode (JsonPath ns) n = JsonPath $ snoc ns n
 
 infixr 5 appendNode as \
+
+length :: JsonPath -> Int
+length (JsonPath ns) = Seq.length ns
 
 data JsonPathNode = KeyNode String
                   | IdxNode Int
