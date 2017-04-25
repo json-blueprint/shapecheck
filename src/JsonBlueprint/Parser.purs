@@ -335,8 +335,11 @@ property = do
     wildcardProp :: Parser Char PropertyNamePattern
     wildcardProp = WildcardName <$> stringDataTypeProps
 
+    wildcardRegexShorthand :: Parser Char PropertyNamePattern
+    wildcardRegexShorthand = (\re -> WildcardName emptyStringDtProps { pattern = Just re }) <$> regexLiteral
+
     propName :: Parser Char PropertyNamePattern
-    propName =  wildcardProp <|> (LiteralName <$> identifier) <|> quotedProp
+    propName =  wildcardProp <|> wildcardRegexShorthand <|> (LiteralName <$> identifier) <|> quotedProp
 
 object :: Parser Char Pattern
 object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where

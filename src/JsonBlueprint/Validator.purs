@@ -262,7 +262,7 @@ validateObject schema basePath obj pattern =
     if nullable result.deriv then deriv2Either result
     else
       let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames result.deriv)
-      in Left $ pure $ ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
+      in Left $ Seq.snoc result.errors $ ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
 
 validateObjectProperty :: Schema -> Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
 validateObjectProperty schema { deriv, errors } prop =
