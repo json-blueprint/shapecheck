@@ -2,7 +2,6 @@ module Test.Main where
 
 import Prelude
 import Data.Sequence as Seq
-import JsonBlueprint.Schema as Schema
 import Node.FS as F
 import Node.FS.Aff as FS
 import Test.Unit.Assert as Assert
@@ -20,6 +19,7 @@ import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import JsonBlueprint.JsonPath (JsonPath)
 import JsonBlueprint.Pattern (Pattern)
+import JsonBlueprint.Schema (Schema)
 import JsonBlueprint.Validator (ValidationError(..), validate)
 import Node.Encoding (Encoding(..))
 import Node.FS.Aff (readdir)
@@ -65,25 +65,25 @@ loadSpecs path =
     spec2Test testFileName md =
       case parseSpec md of
         Left err -> test testFileName $ Assert.assert err false
-        Right { name, pattern, docs } -> test name $ assertions pattern (filterDocs docs)
+        Right { name, pattern, schema, docs } -> test name $ assertions pattern schema (filterDocs docs)
 
     filterDocs :: Seq SampleDoc -> Seq SampleDoc
     filterDocs = Seq.filter (\d -> null $ intersect d.tags skipSpecsTagged)
 
-    assertions :: forall e. Pattern -> Seq SampleDoc -> Aff e Unit
-    assertions pattern docs = case Seq.uncons $ (assertion pattern) <$> docs of
+    assertions :: forall e. Pattern -> Schema -> Seq SampleDoc -> Aff e Unit
+    assertions pattern schema docs = case Seq.uncons $ (assertion pattern schema) <$> docs of
       Just (Tuple a as) -> foldl bind a (const <$> as)
       Nothing -> failure "no sample documents in this spec"
 
-    assertion :: forall e. Pattern -> SampleDoc -> Aff e Unit
-    assertion pattern doc =
+    assertion :: forall e. Pattern -> Schema -> SampleDoc -> Aff e Unit
+    assertion pattern schema doc =
         if doc.expectedErrors == actualErrorPaths then
           success
         else
           failure ("incorrect validation of sample document '" <> doc.name <> "':\n" <> intercalate "\n" problems)
       where
         actualErrors :: Seq ValidationError
-        actualErrors = case validate Schema.empty doc.json pattern of
+        actualErrors = case validate schema doc.json pattern of
           Left errs -> errs
           Right _ -> Seq.empty
 

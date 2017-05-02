@@ -5,7 +5,8 @@ module JsonBlueprint.Schema (
   empty,
   lookupPattern,
   validateAndSimplify,
-  showProblems) where
+  showProblems,
+  singleton) where
 
 import Prelude
 import Data.StrMap as StrMap
@@ -33,6 +34,9 @@ empty = Schema StrMap.empty
 
 add :: String -> Pattern -> Schema -> Schema
 add name pattern (Schema ps) = Schema $ StrMap.insert name pattern ps
+
+singleton :: String -> Pattern -> Schema
+singleton name pattern = Schema $ StrMap.insert name pattern StrMap.empty
 
 lookupPattern :: PatternDefName -> Schema -> Maybe Pattern
 lookupPattern name (Schema ps) = StrMap.lookup name ps

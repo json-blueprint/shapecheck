@@ -2,6 +2,7 @@ module Test.SpecParser where
 
 import Prelude
 import Data.String as Str
+import JsonBlueprint.Schema as Schema
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Parser (jsonParser)
 import Data.Either (Either(..))
@@ -15,16 +16,17 @@ import Data.Sequence (Seq, empty, null, snoc, unsnoc)
 import Data.String (split, toCharArray)
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
-import JsonBlueprint.Parser (jsonPathParser, valuePatternParser)
-import JsonBlueprint.Pattern (Pattern)
 import JsonBlueprint.JsonPath (JsonPath)
+import JsonBlueprint.Parser (jsonPathParser, schemaParser, valuePatternParser)
+import JsonBlueprint.Pattern (Pattern)
+import JsonBlueprint.Schema (Schema)
 import Text.Markdown.SlamDown (Block(..), CodeBlockType(..), Inline(..), SlamDown, SlamDownP(SlamDown))
 import Text.Markdown.SlamDown.Parser (parseMd)
 import Text.Markdown.SlamDown.Traverse (everything)
 
 type Markdown = String
 
-type Spec = { name :: String, pattern :: Pattern, docs :: Seq SampleDoc }
+type Spec = { name :: String, pattern :: Pattern, schema :: Schema, docs :: Seq SampleDoc }
 type SampleDoc = { name :: String, json :: Json, expectedErrors :: Seq JsonPath, tags :: Array String }
 
 parseSpec :: Markdown -> Either String Spec
@@ -34,7 +36,7 @@ parseSpec mdSource = do
     completeSpec parsed
   where
     initialState :: Spec'
-    initialState = { name: Nothing, pattern: Nothing, docs: empty }
+    initialState = { name: Nothing, pattern: Nothing, schema: Nothing, docs: empty }
 
 doParse :: forall o. String -> Parser Char o -> String -> Either String o
 doParse parserDesc parser inputStr =
@@ -56,7 +58,12 @@ parseBlock (Right s) (Header 1 is) = Right $ s { name = Just (renderText is) }
 parseBlock (Right s) (Header 2 is) = Right $ s { docs = snoc s.docs doc } where
   doc :: SampleDoc'
   doc = { name: renderText is, json: Nothing, expectedErrors: empty, tags: [] }
-parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p }) <$> doParse "pattern" valuePatternParser (intercalate "\n" ls)
+parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p, schema = Just $ Schema.singleton "Root" p }) <$> doParse "pattern" valuePatternParser (intercalate "\n" ls)
+parseBlock (Right s) (CodeBlock (Fenced _ "jsbp-schema") ls) = do
+  schema <- doParse "schema" schemaParser (intercalate "\n" ls)
+  (case Schema.lookupPattern "Root" schema of
+     Just p -> pure $ s { pattern = Just p, schema = Just schema }
+     Nothing -> Left "Schema must declare a 'Root' pattern which will be the one JSON documents are validated against.")
 parseBlock (Right s) (CodeBlock (Fenced _ "json") ls) = do
   json <- jsonParser $ intercalate "\n" ls
   case unsnoc s.docs of
@@ -113,7 +120,7 @@ renderText' (Code _ s)  = s
 renderText' (Link is _) = renderText is
 renderText' _           = ""
 
-type Spec' = { name :: Maybe String, pattern :: Maybe Pattern, docs :: Seq SampleDoc' }
+type Spec' = { name :: Maybe String, pattern :: Maybe Pattern, schema :: Maybe Schema, docs :: Seq SampleDoc' }
 type SampleDoc' = { name :: String, json :: Maybe Json, expectedErrors :: Seq JsonPath, tags :: Array String }
 
 completeDoc :: SampleDoc' -> Either String SampleDoc
@@ -122,8 +129,9 @@ completeDoc { name, json, expectedErrors, tags } = do
   pure $ { name, json: js, expectedErrors, tags }
 
 completeSpec :: Spec' -> Either String Spec
-completeSpec { name, pattern, docs } = do
+completeSpec { name, pattern, schema, docs } = do
   n <- maybe (Left "No name defined for spec. Each spec should start with a 1-st level header that specifies it's name.") Right name
-  p <- maybe (Left $ "No JSON Blueprint defined in spec '" <> n <> "'. It should be provided in a `jsbp` fenced code block.") Right pattern
+  p <- maybe (Left $ "No pattern defined in spec '" <> n <> "'. It should be provided in a `jsbp` or `jsbp-schema` fenced code block.") Right pattern
+  s <- maybe (Left $ "No schema defined in spec '" <> n <> "'. It should be provided in a `jsbp` or `jsbp-schema` fenced code block.") Right schema
   ds <- traverse completeDoc docs
-  pure $ { name: n, pattern: p, docs: ds }
+  pure $ { name: n, pattern: p, schema: s, docs: ds }
