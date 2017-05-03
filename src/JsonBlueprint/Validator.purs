@@ -8,7 +8,6 @@ import Prelude
 import Data.Argonaut.Core as Json
 import Data.Int as Int
 import Data.Sequence as Seq
-import Data.Set as Set
 import Data.StrMap as StrMap
 import Data.String as Str
 import Data.String.Regex as Regex
@@ -20,11 +19,10 @@ import Data.Foldable (foldl, intercalate)
 import Data.Maybe (Maybe(..), fromJust, maybe)
 import Data.Monoid (mempty)
 import Data.Sequence (Seq, empty)
-import Data.Set (Set)
 import Data.StrMap (StrMap)
 import Data.Tuple (Tuple(..), snd)
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, walk)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, propertyNames)
 import JsonBlueprint.Schema (Schema, lookupPattern)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
@@ -327,18 +325,6 @@ validateObjectProperty' schema matchesPropName prop pattern = case pattern of
 
     recur :: Pattern -> Maybe Derivative
     recur = validateObjectProperty' schema matchesPropName prop
-
-propertyNames :: Pattern -> Seq String
-propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
-  where
-    propertyNamePatterns :: Pattern -> Set PropertyNamePattern
-    propertyNamePatterns = walk shouldOpen transform
-      where
-        shouldOpen (Property _) = false
-        shouldOpen _            = true
-
-        transform (Property { name }) = Set.singleton name
-        transform _                   = mempty
 
 simpleChoiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Derivative) -> Pattern -> Derivative
 simpleChoiceDeriv createError doValidate pattern =

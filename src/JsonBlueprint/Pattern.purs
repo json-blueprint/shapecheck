@@ -9,8 +9,11 @@ module JsonBlueprint.Pattern (
   GenRegex(..),
   group,
   NumericDtProps(..),
+  ObjectRefinement(..),
   Pattern(..),
   PropertyNamePattern(..),
+  propertyNamePatterns,
+  propertyNames,
   propNameRequiresQuoting,
   RepeatCount(..),
   StringDtProps(..),
@@ -19,13 +22,19 @@ module JsonBlueprint.Pattern (
 
 import Prelude
 import Data.Int as Int
+import Data.List as List
+import Data.List.NonEmpty as NonEmptyList
 import Data.Sequence as Seq
+import Data.Set as Set
 import Data.String as Str
 import Data.Array (catMaybes, intercalate)
 import Data.Either (Either(..))
 import Data.Generic (class Generic, GenericSignature(..), GenericSpine(..), gEq)
+import Data.List.NonEmpty (NonEmptyList)
 import Data.Maybe (Maybe(..), maybe)
+import Data.Monoid (mempty)
 import Data.Sequence (Seq)
+import Data.Set (Set)
 import Data.String.Regex (Regex, flags, parseFlags, renderFlags, regex, source, test)
 import Data.String.Regex.Flags (ignoreCase)
 import Data.String.Regex.Unsafe (unsafeRegex)
@@ -112,6 +121,17 @@ instance ordPropertyNamePattern :: Ord PropertyNamePattern where
   compare (WildcardName { pattern: Nothing }) (WildcardName { pattern: Just _ }) = GT
   compare _ _ = EQ
 
+data ObjectRefinement = NamedRefinement String
+                      | ObjectRefinement Pattern
+
+instance showObjectRefinement :: Show ObjectRefinement where
+  show (ObjectRefinement p) = show (Object p)
+  show (NamedRefinement n) = show (NamedPattern n)
+
+derive instance genericObjectRefinement :: Generic ObjectRefinement
+
+derive instance eqObjectRefinement :: Eq ObjectRefinement
+
 data Pattern = Empty
              | Any
              | Null
@@ -128,6 +148,7 @@ data Pattern = Empty
              | ArrayPattern Pattern
              | Property { name :: PropertyNamePattern, value :: Pattern }
              | Object Pattern
+             | RefinedObject (NonEmptyList ObjectRefinement) -- sorted with highest priority first and lowest last
              | NamedPattern String
 
 type StringDtProps = { minLength :: Maybe Int, maxLength :: Maybe Int, pattern :: Maybe GenRegex }
@@ -145,9 +166,10 @@ showNumericDtProps { min, max, multipleOf } = showProps [
   prop      "multipleOf" multipleOf]
 
 group :: Pattern -> Pattern -> Pattern
-group Empty p2 = p2
-group p1 Empty = p1
-group p1 p2    = Group p1 p2
+group Empty         p2    = p2
+group p1            Empty = p1
+group (Group g1 g2) p2    = group g1 (group g2 p2) -- make group structure similar to List
+group p1 p2               = Group p1 p2
 
 instance showPattern :: Show Pattern where
   show Empty = "Empty"
@@ -188,6 +210,7 @@ instance showPattern :: Show Pattern where
   show (Object Empty)             = "{}"
   show (Object g@(Group _ _))     = "{\n  " <> indent (intercalate ",\n" (show <$> (flattenGroup g))) <> "\n}"
   show (Object p)                 = "{\n  " <> indent (show p) <> "\n}"
+  show (RefinedObject rs)         = intercalate " with " (show <$> List.reverse (NonEmptyList.toList rs))
   show (NamedPattern name)        = "$" <> name
 
 indent :: String -> String
@@ -261,6 +284,18 @@ walk shouldOpen f pattern = case pattern of
   where
     recur :: Pattern -> s
     recur = walk shouldOpen f
+
+propertyNames :: Pattern -> Seq String
+propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
+
+propertyNamePatterns :: Pattern -> Set PropertyNamePattern
+propertyNamePatterns = walk shouldOpen transform
+  where
+    shouldOpen (Property _) = false
+    shouldOpen _            = true
+
+    transform (Property { name }) = Set.singleton name
+    transform _                   = mempty
 
 derive instance genericPattern :: Generic Pattern
 

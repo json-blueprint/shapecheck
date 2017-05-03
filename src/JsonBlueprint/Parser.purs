@@ -8,6 +8,8 @@ import Prelude
 import Data.Argonaut.Core as Json
 import Data.Eulalie.Char as C
 import Data.Eulalie.String as S
+import Data.List as List
+import Data.List.NonEmpty as NonEmptyList
 import Data.Sequence as Seq
 import JsonBlueprint.Schema as Schema
 import Control.Alt ((<|>))
@@ -17,7 +19,7 @@ import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode, toLower)
 import Data.Char.Unicode (isHexDigit)
 import Data.Either (Either(..))
-import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy)
+import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy, sepBy1)
 import Data.Foldable (class Foldable, foldl, foldr)
 import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
@@ -28,7 +30,7 @@ import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
 import JsonBlueprint.JsonPath (JsonPath(..), JsonPathNode(..))
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, Pattern(..), PropertyNamePattern(..), RepeatCount(..), StringDtProps, emptyNumericDtProps, emptyStringDtProps, group)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), NumericDtProps, ObjectRefinement(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), StringDtProps, emptyNumericDtProps, emptyStringDtProps, group)
 import JsonBlueprint.Schema (Schema)
 import Partial.Unsafe (unsafePartial)
 
@@ -341,23 +343,52 @@ property = do
     propName :: Parser Char PropertyNamePattern
     propName =  wildcardProp <|> wildcardRegexShorthand <|> (LiteralName <$> identifier) <|> quotedProp
 
-object :: Parser Char Pattern
-object = commaSeparated '{' objectContent '}' (Object <<< list2Group) where
+objectContent :: Parser Char Pattern
+objectContent = commaSeparated '{' contentParser '}' list2Group where
   objectGroup :: Parser Char Pattern
-  objectGroup = lazyParser (defer \_ -> groupParser objectContent)
+  objectGroup = lazyParser (defer \_ -> groupParser contentParser)
 
   nonChoiceObjectContent :: Parser Char Pattern
   nonChoiceObjectContent =
     lazyParser (defer \_ -> property) <|>
     lazyParser (defer \_ -> objectGroup)
 
-  objectContent :: Parser Char Pattern
-  objectContent = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
+  contentParser :: Parser Char Pattern
+  contentParser = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
 
-namedPatternRef :: Parser Char Pattern
-namedPatternRef = do
-  C.char '$'
-  cut $ NamedPattern <$> identifier
+objectOrNamedPattern :: Parser Char Pattern
+objectOrNamedPattern = do
+    base <- refinement
+    (refinedObject base) <|> (case base of
+                                 ObjectRefinement p -> pure $ Object p
+                                 NamedRefinement n -> pure $ NamedPattern n)
+  where
+    namedRefinement :: Parser Char ObjectRefinement
+    namedRefinement = do
+      C.char '$'
+      cut $ NamedRefinement <$> identifier
+
+    objectRefinement :: Parser Char ObjectRefinement
+    objectRefinement = ObjectRefinement <$> (lazyParser $ defer (\_ -> objectContent))
+
+    refinement :: Parser Char ObjectRefinement
+    refinement = namedRefinement <|> objectRefinement
+
+    refinementSep :: Parser Char Unit
+    refinementSep = do
+      S.spaces
+      S.string "with"
+      S.spaces
+      pure unit
+
+    refinedObject :: ObjectRefinement -> Parser Char Pattern
+    refinedObject base = do
+      refinementSep
+      cut $ do
+        refs <- sepBy1 refinementSep refinement
+        (let allRefs = base : refs
+             allRefsNe = unsafePartial $ fromJust $ NonEmptyList.fromList $ List.reverse allRefs
+         in pure $ RefinedObject allRefsNe)
 
 nonChoiceValuePattern :: Parser Char Pattern
 nonChoiceValuePattern =
@@ -371,9 +402,8 @@ nonChoiceValuePattern =
     intDataType <|>
     numberDataType <|>
     regexStringShorthand <|>
-    namedPatternRef <|>
     lazyParser (defer \_ -> arrayPattern) <|>
-    lazyParser (defer \_ -> object)
+    lazyParser (defer \_ -> objectOrNamedPattern)
   where
     null :: Parser Char Pattern
     null = const Null <$> S.string "null"

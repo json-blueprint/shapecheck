@@ -2,6 +2,7 @@ module Test.SpecParser where
 
 import Prelude
 import Data.String as Str
+import Data.Eulalie.Error as Error
 import JsonBlueprint.Schema as Schema
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Parser (jsonParser)
@@ -41,7 +42,7 @@ parseSpec mdSource = do
 doParse :: forall o. String -> Parser Char o -> String -> Either String o
 doParse parserDesc parser inputStr =
     case parse consumeInputParser input of
-      Error({expected}) -> Left $ "failed to parse " <> parserDesc <> ": " <> intercalate "; " expected
+      Error(err) -> Left $ "failed to parse " <> parserDesc <> ": " <> Error.print err
       Success({value}) -> Right $ value
   where
     input :: Stream Char
@@ -61,9 +62,13 @@ parseBlock (Right s) (Header 2 is) = Right $ s { docs = snoc s.docs doc } where
 parseBlock (Right s) (CodeBlock (Fenced _ "jsbp") ls) = (\p -> s { pattern = Just p, schema = Just $ Schema.singleton "Root" p }) <$> doParse "pattern" valuePatternParser (intercalate "\n" ls)
 parseBlock (Right s) (CodeBlock (Fenced _ "jsbp-schema") ls) = do
   schema <- doParse "schema" schemaParser (intercalate "\n" ls)
-  (case Schema.lookupPattern "Root" schema of
-     Just p -> pure $ s { pattern = Just p, schema = Just schema }
-     Nothing -> Left "Schema must declare a 'Root' pattern which will be the one JSON documents are validated against.")
+  case Schema.validateAndSimplify schema of
+    Right simplified ->
+      case Schema.lookupPattern "Root" simplified of
+        Just p -> pure $ s { pattern = Just p, schema = Just simplified }
+        Nothing -> Left "Schema must declare a 'Root' pattern which will be the one JSON documents are validated against."
+    Left problems -> Left $ intercalate ", " $ (\problem -> problem. message) <$> problems
+
 parseBlock (Right s) (CodeBlock (Fenced _ "json") ls) = do
   json <- jsonParser $ intercalate "\n" ls
   case unsnoc s.docs of
