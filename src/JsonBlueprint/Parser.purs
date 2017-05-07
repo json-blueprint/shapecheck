@@ -26,6 +26,7 @@ import Data.Lazy (Lazy, defer, force)
 import Data.List (List, (:))
 import Data.List.Lazy (replicateM)
 import Data.Maybe (Maybe(..), fromJust, isJust)
+import Data.Monoid (mempty)
 import Data.String (fromCharArray, singleton)
 import Data.String.Regex (regex)
 import Data.String.Regex.Flags (RegexFlags, ignoreCase, noFlags)
@@ -62,7 +63,7 @@ hexDigit = expected (sat isHexDigit) "hex digit"
 unicodeEscape :: Parser Char Char
 unicodeEscape = do
     _  <- expected (S.string "\\u") "unicode escape sequence"
-    ds <- cut $ expected (replicateM 4 hexDigit) "invalid unicode escape sequence"
+    ds <- cut $ expected (replicateM 4 hexDigit) "unicode escape sequence"
     decodeChar ds
   where
     decodeChar :: forall f. (Foldable f) => f Char -> Parser Char Char
@@ -79,7 +80,7 @@ nonZeroDigit :: Parser Char Char
 nonZeroDigit = sat $ \c -> c >= '1' && c <= '9'
 
 nonNegativeInt :: Parser Char Int
-nonNegativeInt = expected nonNegativeInt' "non-negative integer" where
+nonNegativeInt = expected nonNegativeInt' "integer" where
   nonNegativeInt' = zeroP <|> do
     first <- nonZeroDigit
     rest <- C.many C.digit
@@ -141,13 +142,22 @@ commaSeparator = do
 
 commaSeparated :: forall i o. Char -> Parser Char i -> Char -> (List i -> o) -> Parser Char o
 commaSeparated open itemParser close transform = do
-  _ <- C.char open
-  cut do
-    _  <- S.spaces
-    is <- sepBy commaSeparator itemParser
-    _  <- S.spaces
-    _  <- C.char close
-    pure $ transform is
+    _ <- C.char open
+    cut do
+      _  <- S.spaces
+      -- this is a little bit more complicated to produce better error messages - once we start
+      -- parsing an item, we make any error unrecoverable
+      closeOnly <|> oneOrMoreItemsAndClose
+  where
+    closeOnly :: Parser Char o
+    closeOnly = const (transform mempty) <$> C.char close
+
+    oneOrMoreItemsAndClose :: Parser Char o
+    oneOrMoreItemsAndClose = do
+      is <- sepBy commaSeparator (cut itemParser)
+      _  <- S.spaces
+      _  <- C.char close
+      pure $ transform is
 
 -- TODO: improve error reporting for misspelled property names
 dtProps :: forall d. d -> Array (Parser Char (d -> d)) -> Parser Char d
@@ -180,7 +190,7 @@ stringLiteral' = do
   _ <- expected (C.char '"') "string literal"
   cut do
     cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
-    _ <- expected (C.char '"') "unterminated string literal"
+    _ <- expected (C.char '"') "end of string literal"
     pure $ charList2String cs
 
 numberLiteral :: Parser Char Pattern
@@ -432,7 +442,7 @@ schemaParser :: Parser Char Schema
 schemaParser = (sepBy S.spaces namedPatternDefinition) >>= toSchema where
   appendPattern :: Parser Char Schema -> { name :: String, pattern :: Pattern } -> Parser Char Schema
   appendPattern schemaP { name, pattern } = schemaP >>= \schema ->
-    if isJust $ Schema.lookupPattern name schema then expected fail $ "Multiple definitions of pattern `" <> name <> "` found in schema."
+    if isJust $ Schema.lookupPattern name schema then expected fail $ "unique names of all patterns; multiple definitions of `" <> name <> "` found in schema"
     else pure $ Schema.add name pattern schema
 
   toSchema :: List { name :: String, pattern :: Pattern } -> Parser Char Schema
