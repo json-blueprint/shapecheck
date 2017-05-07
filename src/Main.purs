@@ -1,5 +1,6 @@
 module Main (
   createValidator,
+  validateSchema,
   JsValidationError
 ) where
 
@@ -11,13 +12,16 @@ import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Exception (EXCEPTION, error, throwException)
 import Control.Monad.Eff.Unsafe (unsafePerformEff)
 import Data.Argonaut.Core (Json)
+import Data.Array (intercalate)
 import Data.Either (Either(..))
+import Data.Eulalie.Error (ParseError)
 import Data.Eulalie.Parser (eof, parse, Parser)
 import Data.Eulalie.Result (ParseResult(..))
-import Data.Eulalie.Stream (stream, Stream)
-import Data.Foldable (intercalate)
+import Data.Eulalie.Stream (Stream(..), atEnd, stream)
 import Data.Function.Uncurried (Fn2, mkFn2)
 import Data.Maybe (Maybe(..))
+import Data.Monoid (mempty)
+import Data.String (fromCharArray)
 import JsonBlueprint.Parser (schemaParser)
 import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, showProblems, validateAndSimplify)
 import JsonBlueprint.Validator (ValidationError(..))
@@ -68,10 +72,22 @@ validate schema patternName json =
     valid :: JsValidationResult
     valid = { valid: true, errors: [] }
 
+type SchemaError = { message :: String, index :: Int }
+
+validateSchema :: SchemaString -> { valid :: Boolean, errors :: Array SchemaError }
+validateSchema inputStr = case parseSchema' inputStr of
+  Right _  -> { valid: true, errors: mempty }
+  Left err -> { valid: false, errors: pure err }
+
 parseSchema :: SchemaString -> Either String Schema
-parseSchema inputStr =
+parseSchema inputStr = case parseSchema' inputStr of
+  Right s  -> pure s
+  Left err -> Left err.message
+
+parseSchema' :: SchemaString -> Either SchemaError Schema
+parseSchema' inputStr =
     case parse consumeInputParser input of
-      Error({expected}) -> Left $ "failed to parse schema: " <> intercalate "; " expected
+      Error(err@{ input: Stream { cursor } }) -> Left $ { message: printErr err, index: cursor }
       Success({value}) -> Right $ value
   where
     input :: Stream Char
@@ -82,3 +98,11 @@ parseSchema inputStr =
       val <- schemaParser
       eof
       pure val
+
+printErr :: ParseError Char -> String
+printErr { input: input@Stream { buffer, cursor }, expected } =
+  "Expected " <> exp expected <> ", saw "
+  <> (if atEnd input then "EOF" else quote $ Str.take 6 $ Str.drop cursor buf)
+  where buf = fromCharArray buffer
+        quote s = "\"" <> s <> "\""
+        exp xs = intercalate " or " $ Arr.fromFoldable xs
