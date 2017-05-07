@@ -356,7 +356,7 @@ property = do
 objectContent :: Parser Char Pattern
 objectContent = commaSeparated '{' contentParser '}' list2Group where
   objectGroup :: Parser Char Pattern
-  objectGroup = lazyParser (defer \_ -> groupParser contentParser)
+  objectGroup = repeatable $ lazyParser (defer \_ -> groupParser contentParser)
 
   nonChoiceObjectContent :: Parser Char Pattern
   nonChoiceObjectContent =
@@ -364,7 +364,7 @@ objectContent = commaSeparated '{' contentParser '}' list2Group where
     lazyParser (defer \_ -> objectGroup)
 
   contentParser :: Parser Char Pattern
-  contentParser = withChoice <<< repeatable $ lazyParser (defer \u -> nonChoiceObjectContent)
+  contentParser = withChoice $ lazyParser (defer \u -> nonChoiceObjectContent)
 
 objectOrNamedPattern :: Parser Char Pattern
 objectOrNamedPattern = do
@@ -431,12 +431,13 @@ valuePatternParser = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
 namedPatternDefinition :: Parser Char { name :: String, pattern :: Pattern }
 namedPatternDefinition = do
   name <- identifier
-  _ <- S.spaces
-  _ <- C.char '='
+  _    <- S.spaces
   cut do
-    _       <- S.spaces
-    pattern <- valuePatternParser
-    pure { name, pattern }
+    _ <- C.char '='
+    cut do
+      _       <- S.spaces
+      pattern <- valuePatternParser
+      pure { name, pattern }
 
 schemaParser :: Parser Char Schema
 schemaParser = (sepBy S.spaces namedPatternDefinition) >>= toSchema where
