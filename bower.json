@@ -7,27 +7,19 @@
     "output"
   ],
   "dependencies": {
-    "purescript-prelude": "^2.5.0",
-    "purescript-console": "^2.0.0",
-    "purescript-maybe": "^2.1.1",
-    "purescript-unicode": "^2.0.2",
-    "purescript-integers": "^2.1.1",
-    "purescript-eulalie": "^4.1.0",
-    "purescript-foldable-traversable": "^2.2.0",
-    "purescript-quickcheck": "^3.1.1",
-    "purescript-generics": "^3.3.0",
-    "purescript-argonaut-core": "^2.0.1",
-    "purescript-sequences": "^1.0.2",
-    "purescript-validation": "^2.0.0"
+    "purescript-argonaut-core": "^3.1.0",
+    "purescript-catenable-lists": "^4.0.0",
+    "purescript-console": "^3.0.0",
+    "purescript-eulalie": "^5.0.0",
+    "purescript-generics": "^4.0.0",
+    "purescript-maybe": "^3.0.0",
+    "purescript-prelude": "^3.0.0",
+    "purescript-unicode": "^3.0.1"
   },
   "devDependencies": {
-    "purescript-psci-support": "^2.0.0",
-    "purescript-test-unit": "^10.1.0",
-    "purescript-node-fs-aff": "^3.0.0",
-    "purescript-markdown": "^9.0.0"
-  },
-  "resolutions": {
-    "purescript-maybe": "^2.1.1",
-    "purescript-foldable-traversable": "^2.2.0"
+    "purescript-psci-support": "^3.0.0",
+    "purescript-test-unit": "^11.0.0",
+    "purescript-node-fs-aff": "^4.0.0",
+    "purescript-markdown": "^10.0.0"
   }
 }

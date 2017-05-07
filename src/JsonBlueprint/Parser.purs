@@ -6,11 +6,11 @@ module JsonBlueprint.Parser (
 
 import Prelude
 import Data.Argonaut.Core as Json
+import Data.CatList as CatList
 import Data.Eulalie.Char as C
 import Data.Eulalie.String as S
 import Data.List as List
 import Data.List.NonEmpty as NonEmptyList
-import Data.Sequence as Seq
 import JsonBlueprint.Schema as Schema
 import Control.Alt ((<|>))
 import Data.Argonaut.Parser (jsonParser)
@@ -45,7 +45,7 @@ stringChar =  sat \c -> c /= '\\' && c /= '"'
 standardEscape :: Parser Char Char
 standardEscape = expected standardEscape' "standard escape sequence" where
   standardEscape' = do
-    C.char '\\'
+    _ <- C.char '\\'
     cut do
       c <- C.oneOf "\\/\"bfnrt"
       pure $ case c of
@@ -61,7 +61,7 @@ hexDigit = expected (sat isHexDigit) "hex digit"
 
 unicodeEscape :: Parser Char Char
 unicodeEscape = do
-    expected (S.string "\\u") "unicode escape sequence"
+    _  <- expected (S.string "\\u") "unicode escape sequence"
     ds <- cut $ expected (replicateM 4 hexDigit) "invalid unicode escape sequence"
     decodeChar ds
   where
@@ -107,7 +107,7 @@ number = do
 
     fraction ::  Parser Char String
     fraction = do
-      C.char '.'
+      _ <- C.char '.'
       cut do
         ds <- C.many1 C.digit
         e <- maybe exp
@@ -122,31 +122,31 @@ integer = do
 
 dtProp :: forall v d. String -> Parser Char v -> (v -> d -> d) -> Parser Char (d -> d)
 dtProp name valP f = do
-  S.spaces
-  S.string name
-  S.spaces
-  C.char '='
+  _ <- S.spaces
+  _ <- S.string name
+  _ <- S.spaces
+  _ <- C.char '='
   cut do
-    S.spaces
+    _   <- S.spaces
     val <- valP
-    S.spaces
+    _   <- S.spaces
     pure $ f val
 
 commaSeparator :: Parser Char Unit
 commaSeparator = do
-  S.spaces
-  C.char ','
-  S.spaces
+  _ <- S.spaces
+  _ <- C.char ','
+  _ <- S.spaces
   pure unit
 
 commaSeparated :: forall i o. Char -> Parser Char i -> Char -> (List i -> o) -> Parser Char o
 commaSeparated open itemParser close transform = do
-  C.char open
+  _ <- C.char open
   cut do
-    S.spaces
+    _  <- S.spaces
     is <- sepBy commaSeparator itemParser
-    S.spaces
-    C.char close
+    _  <- S.spaces
+    _  <- C.char close
     pure $ transform is
 
 -- TODO: improve error reporting for misspelled property names
@@ -155,7 +155,7 @@ dtProps a b = (propList a b) <|> pure a
   where
     propList :: d -> Array (Parser Char (d -> d)) -> Parser Char d
     propList dt propParsers = do
-      S.spaces
+      _ <- S.spaces
       commaSeparated '(' (reduce propParsers) ')' (foldl (#) dt)
 
     reduce :: Array (Parser Char (d -> d)) -> Parser Char (d -> d)
@@ -177,10 +177,10 @@ stringLiteral = StringLiteral <$> stringLiteral'
 
 stringLiteral' :: Parser Char String
 stringLiteral' = do
-  expected (C.char '"') "string literal"
+  _ <- expected (C.char '"') "string literal"
   cut do
     cs <- many $ stringChar <|> unicodeEscape <|> standardEscape
-    expected (C.char '"') "unterminated string literal"
+    _ <- expected (C.char '"') "unterminated string literal"
     pure $ charList2String cs
 
 numberLiteral :: Parser Char Pattern
@@ -196,22 +196,22 @@ numericDtProps emptyDt numParser = dtProps emptyDt [
 
 intDataType :: Parser Char Pattern
 intDataType = do
-  S.string "Int"
+  _  <- S.string "Int"
   ps <- numericDtProps emptyNumericDtProps integer
   pure $ IntDataType ps
 
 numberDataType :: Parser Char Pattern
 numberDataType = do
-  S.string "Number"
+  _  <- S.string "Number"
   ps <- numericDtProps emptyNumericDtProps number
   pure $ NumberDataType ps
 
 regexLiteral :: Parser Char GenRegex
 regexLiteral = do
-    C.char '/'
+    _ <- C.char '/'
     cut do
       cs <- many $ escapedSlash <|> C.notChar '/'
-      C.char '/'
+      _  <- C.char '/'
       fs <- maybe $ const ignoreCase <$> C.char 'i'
       makeRegex (charList2String cs) fs
   where
@@ -225,7 +225,7 @@ makeRegex pattern flags = case regex pattern flags of
 
 stringDataTypeProps :: Parser Char StringDtProps
 stringDataTypeProps = do
-    S.string "String"
+    _  <- S.string "String"
     ps <- dtProps emptyStringDtProps [
       dtProp "minLength" nonNegativeInt (\i ps -> ps { minLength = Just i }),
       dtProp "maxLength" nonNegativeInt (\i ps -> ps { maxLength = Just i }),
@@ -250,14 +250,14 @@ withChoice :: Parser Char Pattern -> Parser Char Pattern
 withChoice contentP = do
     first <- contentP
     cut do
-      S.spaces
+      _ <- S.spaces
       (parseChoice first) <|> pure first
   where
     parseChoice :: Pattern -> Parser Char Pattern
     parseChoice first = do
-      C.char '|'
+      _ <- C.char '|'
       cut do
-        S.spaces
+        _ <- S.spaces
         second <- lazyParser (defer \_ -> withChoice contentP)
         pure $ Choice first second
 
@@ -265,7 +265,7 @@ repeatable :: Parser Char Pattern -> Parser Char Pattern
 repeatable valueParser = do
   value <- valueParser
   cut do
-    S.spaces
+    _ <- S.spaces
     count <- (Just <$> repeatCount) <|> pure Nothing
     pure $ case count of
       Just c  -> Repeat value c
@@ -280,21 +280,21 @@ repeatCount =
   where
     parseUpperBound :: Parser Char (Maybe Int)
     parseUpperBound = do
-      C.char ','
+      _ <- C.char ','
       cut do
-        S.spaces
+        _ <- S.spaces
         max <- (Just <$> nonNegativeInt) <|> pure Nothing
-        S.spaces
-        C.char '}'
+        _ <- S.spaces
+        _ <- C.char '}'
         pure max
 
     parseBounds :: Parser Char RepeatCount
     parseBounds = do
-      C.char '{'
+      _ <- C.char '{'
       cut do
-        S.spaces
+        _ <- S.spaces
         min <- nonNegativeInt
-        S.spaces
+        _ <- S.spaces
         max <- (const (Just min) <$> C.char '}') <|> parseUpperBound
         pure $ RepeatCount { min, max }
 
@@ -324,10 +324,10 @@ identifier = do
 property :: Parser Char Pattern
 property = do
     name <- propName
-    S.spaces
-    C.char ':'
+    _    <- S.spaces
+    _    <- C.char ':'
     cut do
-      S.spaces
+      _     <- S.spaces
       value <- valuePatternParser
       pure $ Property { name, value }
   where
@@ -365,7 +365,7 @@ objectOrNamedPattern = do
   where
     namedRefinement :: Parser Char ObjectRefinement
     namedRefinement = do
-      C.char '$'
+      _ <- C.char '$'
       cut $ NamedRefinement <$> identifier
 
     objectRefinement :: Parser Char ObjectRefinement
@@ -376,9 +376,9 @@ objectOrNamedPattern = do
 
     refinementSep :: Parser Char Unit
     refinementSep = do
-      S.spaces
-      S.string "with"
-      S.spaces
+      _ <- S.spaces
+      _ <- S.string "with"
+      _ <- S.spaces
       pure unit
 
     refinedObject :: ObjectRefinement -> Parser Char Pattern
@@ -421,10 +421,10 @@ valuePatternParser = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
 namedPatternDefinition :: Parser Char { name :: String, pattern :: Pattern }
 namedPatternDefinition = do
   name <- identifier
-  S.spaces
-  C.char '='
+  _ <- S.spaces
+  _ <- C.char '='
   cut do
-    S.spaces
+    _       <- S.spaces
     pattern <- valuePatternParser
     pure { name, pattern }
 
@@ -440,20 +440,20 @@ schemaParser = (sepBy S.spaces namedPatternDefinition) >>= toSchema where
 
 jsonPathParser :: Parser Char JsonPath
 jsonPathParser = do
-    C.char '.'
+    _  <- C.char '.'
     ns <- sepBy (C.char '.') $ idxNode <|> (KeyNode <$> identifier) <|> keyNode
-    pure $ JsonPath $ Seq.fromFoldable ns
+    pure $ JsonPath $ CatList.fromFoldable ns
   where
     idxNode :: Parser Char JsonPathNode
     idxNode = do
-      C.char '['
+      _   <- C.char '['
       idx <- nonNegativeInt
-      C.char ']'
+      _   <- C.char ']'
       pure $ IdxNode idx
 
     keyNode :: Parser Char JsonPathNode
     keyNode = do
-      C.char '['
+      _   <- C.char '['
       key <- stringLiteral'
-      C.char ']'
+      _   <- C.char ']'
       pure $ KeyNode key

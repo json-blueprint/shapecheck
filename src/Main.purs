@@ -20,7 +20,7 @@ import Data.Function.Uncurried (Fn2, mkFn2)
 import Data.Maybe (Maybe(..))
 import JsonBlueprint.Parser (schemaParser)
 import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, showProblems, validateAndSimplify)
-import JsonBlueprint.Validator (ValidationError(..), ValidationErrors)
+import JsonBlueprint.Validator (ValidationError(..))
 
 type SchemaString = String
 
@@ -48,17 +48,17 @@ createValidator' schemaStr = do
 unsafeValidate :: Schema -> PatternDefName -> Json -> JsValidationResult
 unsafeValidate schema patternName json = unsafePerformEff $ validate schema patternName json
 
-validate :: forall eff. Schema -> PatternDefName -> Json -> Eff (err :: EXCEPTION | eff) JsValidationResult
+validate :: forall eff. Schema -> PatternDefName -> Json -> Eff (exception :: EXCEPTION | eff) JsValidationResult
 validate schema patternName json =
     case lookupPattern patternName schema of
       Just pattern -> pure $ res2Js $ Validator.validate schema json pattern
       Nothing -> throwException $ error $ "No pattern with name `" <> patternName <> "` found in the schema."
   where
-    res2Js :: Either ValidationErrors Unit -> JsValidationResult
+    res2Js :: Either (Array ValidationError) Unit -> JsValidationResult
     res2Js (Right _) = valid
     res2Js (Left es) = failure2Js es
 
-    failure2Js :: ValidationErrors -> JsValidationResult
+    failure2Js :: (Array ValidationError) -> JsValidationResult
     failure2Js es = { valid: false, errors: Arr.fromFoldable $ error2Js <$> es }
 
     error2Js :: ValidationError -> JsValidationError

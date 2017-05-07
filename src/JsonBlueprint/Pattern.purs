@@ -21,19 +21,20 @@ module JsonBlueprint.Pattern (
 ) where
 
 import Prelude
+import Data.Array as Array
+import Data.CatList as CatList
 import Data.Int as Int
 import Data.List as List
 import Data.List.NonEmpty as NonEmptyList
-import Data.Sequence as Seq
 import Data.Set as Set
 import Data.String as Str
 import Data.Array (catMaybes, intercalate)
+import Data.CatList (CatList)
 import Data.Either (Either(..))
 import Data.Generic (class Generic, GenericSignature(..), GenericSpine(..), gEq)
 import Data.List.NonEmpty (NonEmptyList)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Monoid (mempty)
-import Data.Sequence (Seq)
 import Data.Set (Set)
 import Data.String.Regex (Regex, flags, parseFlags, renderFlags, regex, source, test)
 import Data.String.Regex.Flags (ignoreCase)
@@ -243,16 +244,16 @@ foldGroup f accu = case _ of
   Group p1 p2 -> foldGroup f (foldGroup f accu p1) p2
   other -> f accu other
 
-flattenGroup :: Pattern -> Seq Pattern
-flattenGroup = foldGroup Seq.snoc Seq.empty
+flattenGroup :: Pattern -> CatList Pattern
+flattenGroup = foldGroup CatList.snoc CatList.empty
 
 foldChoice :: forall o. (o -> Pattern -> o) -> o -> Pattern -> o
 foldChoice f accu = case _ of
   Choice p1 p2 -> foldChoice f (foldChoice f accu p1) p2
   other -> f accu other
 
-flattenChoice :: Pattern -> Seq Pattern
-flattenChoice = foldChoice Seq.snoc Seq.empty
+flattenChoice :: Pattern -> CatList Pattern
+flattenChoice = foldChoice CatList.snoc CatList.empty
 
 walk :: forall s. Semigroup s => (Pattern -> Boolean) -> (Pattern -> s) -> Pattern -> s
 walk shouldOpen f pattern = case pattern of
@@ -285,8 +286,8 @@ walk shouldOpen f pattern = case pattern of
     recur :: Pattern -> s
     recur = walk shouldOpen f
 
-propertyNames :: Pattern -> Seq String
-propertyNames pattern = Seq.sort $ show <$> (Seq.fromFoldable $ propertyNamePatterns pattern)
+propertyNames :: Pattern -> Array String
+propertyNames pattern = Array.sort $ show <$> (Array.fromFoldable $ propertyNamePatterns pattern)
 
 propertyNamePatterns :: Pattern -> Set PropertyNamePattern
 propertyNamePatterns = walk shouldOpen transform

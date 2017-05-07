@@ -12,13 +12,13 @@ import Prelude
 import Data.List.NonEmpty as NonEmptyList
 import Data.Set as Set
 import Data.StrMap as StrMap
+import Data.CatList (CatList)
 import Data.Either (Either(..))
 import Data.Foldable (find, foldl, intercalate)
 import Data.List (List)
 import Data.List.NonEmpty (NonEmptyList(..))
 import Data.Maybe (Maybe(..), isJust)
 import Data.NonEmpty ((:|))
-import Data.Sequence (Seq)
 import Data.Set (Set)
 import Data.StrMap (StrMap)
 import Data.Traversable (traverse)
@@ -49,7 +49,7 @@ lookupPattern name (Schema ps) = StrMap.lookup name ps
 
 type PatternDefName = String
 type SchemaProblem = { message :: String, inDef :: Maybe PatternDefName, pattern :: Pattern }
-type SchemaProblems = Seq SchemaProblem
+type SchemaProblems = CatList SchemaProblem
 
 showProblems :: SchemaProblems -> String
 showProblems ps = intercalate "\n" $ showProblem <$> ps
@@ -128,7 +128,7 @@ simplifyPattern schema patternDefs@(NonEmptyList (patternDef :| _) ) pattern  = 
               Right _ -> fail $ "simplification of refined object pattern did not yield an object pattern, this is a bug in the simplifier"
               left -> left
           Object p -> recurWithDef name p
-          _ -> fail $ "definition of object pattern " <> show (NamedPattern patternDef) <> " is mixing in " <>
+          _ -> fail $ "definition of " <> show (NamedPattern patternDef) <> " is mixing in " <>
                       show (NamedPattern name) <> " which is not an object pattern; only object patterns can be used as mixins"
     resolveRefinement (ObjectRefinement contentP) = recur contentP
 

@@ -6,26 +6,27 @@ module JsonBlueprint.JsonPath (
   (\)) where
 
 import Prelude
-import Data.Sequence as Seq
-import Data.Foldable (intercalate)
-import Data.Monoid (class Monoid, mempty)
-import Data.Sequence (Seq, snoc)
+import Data.Array as Array
+import Data.CatList as CatList
+import Data.CatList (CatList, snoc)
+import Data.Foldable (foldl, intercalate)
+import Data.Monoid (class Monoid)
 import JsonBlueprint.Pattern (propNameRequiresQuoting)
 
 -- | Simple jq-like path pointing to a location in a JSON document
-newtype JsonPath = JsonPath (Seq JsonPathNode)
+newtype JsonPath = JsonPath (CatList JsonPathNode)
 
 instance semigroupJsonPath :: Semigroup JsonPath where
   append (JsonPath ns) (JsonPath ms) = JsonPath $ ns <> ms
 
 instance monoidJsonPath :: Monoid JsonPath where
-  mempty = JsonPath (mempty :: Seq JsonPathNode)
+  mempty = JsonPath (CatList.empty :: CatList JsonPathNode)
 
 instance showJsonPath :: Show JsonPath where
   show (JsonPath ns) = "." <> intercalate "." (show <$> ns)
 
 instance eqJsonPath :: Eq JsonPath where
-  eq (JsonPath n1s) (JsonPath n2s) = n1s == n2s
+  eq (JsonPath n1s) (JsonPath n2s) = Array.fromFoldable n1s == Array.fromFoldable n2s
 
 appendNode :: JsonPath -> JsonPathNode -> JsonPath
 appendNode (JsonPath ns) n = JsonPath $ snoc ns n
@@ -33,7 +34,7 @@ appendNode (JsonPath ns) n = JsonPath $ snoc ns n
 infixr 5 appendNode as \
 
 length :: JsonPath -> Int
-length (JsonPath ns) = Seq.length ns
+length (JsonPath ns) = foldl (\acc _ -> acc + 1) 0 ns
 
 data JsonPathNode = KeyNode String
                   | IdxNode Int

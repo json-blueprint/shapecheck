@@ -1,24 +1,24 @@
 module JsonBlueprint.Validator (
   ValidationError(..),
-  ValidationErrors,
   validate
 ) where
 
 import Prelude
+import Data.Array as Array
 import Data.Argonaut.Core as Json
+import Data.CatList as CatList
 import Data.Int as Int
-import Data.Sequence as Seq
 import Data.StrMap as StrMap
 import Data.String as Str
 import Data.String.Regex as Regex
 import JsonBlueprint.JsonPath as JsonPath
 import Data.Argonaut.Core (Json, foldJson, foldJsonArray, foldJsonBoolean, foldJsonNull, foldJsonNumber, foldJsonObject, foldJsonString)
 import Data.Array (mapWithIndex)
+import Data.CatList (CatList)
 import Data.Either (Either(..), fromRight, isRight)
 import Data.Foldable (foldl, intercalate)
-import Data.Maybe (Maybe(..), fromJust, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Monoid (mempty)
-import Data.Sequence (Seq, empty)
 import Data.StrMap (StrMap)
 import Data.Tuple (Tuple(..), snd)
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
@@ -28,7 +28,7 @@ import Math (remainder)
 import Partial.Unsafe (unsafePartial)
 
 -- | type of validation errors; it's a newtype as type synonyms can't be recursive
-newtype ValidationError = ValidationError { path :: JsonPath, pattern :: Pattern, message :: String, children :: Seq ValidationError }
+newtype ValidationError = ValidationError { path :: JsonPath, pattern :: Pattern, message :: String, children :: CatList ValidationError }
 
 instance showValidationError :: Show ValidationError where
   show (ValidationError { path, pattern, message, children }) =
@@ -37,7 +37,7 @@ instance showValidationError :: Show ValidationError where
    ", pattern: " <> show pattern <>
    ", children: " <> show children <> "}"
 
-type ValidationErrors = Seq ValidationError
+type ValidationErrors = CatList ValidationError
 
 -- | when matching Pattern against part of complex JSON value (an array item or
 -- | a property of JSON object), it doesn't have to match fully - we can be left
@@ -47,15 +47,17 @@ type ValidationErrors = Seq ValidationError
 type Derivative = { deriv :: Pattern, errors :: ValidationErrors }
 
 isValid :: Derivative -> Boolean
-isValid { errors } = Seq.null errors
+isValid { errors } = CatList.null errors
 
 deriv2Either :: Derivative -> Either ValidationErrors Unit
 deriv2Either der =
   if isValid der then pure unit
   else Left der.errors
 
-validate :: Schema -> Json -> Pattern -> Either ValidationErrors Unit
-validate schema = validateValue schema mempty
+validate :: Schema -> Json -> Pattern -> Either (Array ValidationError) Unit
+validate schema json pattern = case validateValue schema mempty json pattern of
+  Right _   -> pure unit
+  Left errs -> Left $ Array.fromFoldable errs
 
 -- | validates given JSON value (null / Boolean / String / Number / Array / Object)
 -- | against the given pattern; this does not produce a derivative each of these
@@ -117,7 +119,7 @@ validateValue schema path json pattern = case pattern of
     fail msg = Left $ pure $ error msg
 
     error :: String -> ValidationError
-    error = (flip aggError) Seq.empty
+    error = (flip aggError) mempty
 
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
@@ -194,21 +196,21 @@ validateValue schema path json pattern = case pattern of
 validateValueDeriv :: Schema -> JsonPath -> Json -> Pattern -> Derivative
 validateValueDeriv schema path json = result2Deriv <<< (validateValue schema path json) where
   result2Deriv :: Either ValidationErrors Unit -> Derivative
-  result2Deriv (Right _) = { deriv: Empty, errors: empty }
+  result2Deriv (Right _) = { deriv: Empty, errors: mempty }
   result2Deriv (Left es) = { deriv: Empty, errors: es }
 
 validateArray :: Schema -> JsonPath -> Array Json -> Pattern -> Either ValidationErrors Unit
 validateArray schema basePath is pattern =
     let
       zippedWithPath = mapWithIndex (\idx item -> { json: item, path: basePath \ IdxNode idx }) is
-      result = foldl validateItem { deriv: pattern, errors: empty } zippedWithPath
+      result = foldl validateItem { deriv: pattern, errors: mempty } zippedWithPath
     in
       if nullable result.deriv then deriv2Either result
       else
         let
           message = "Unexpected end of array. Pattern for remaining items: " <> show result.deriv
-          err = ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
-        in Left $ Seq.snoc result.errors err
+          err = ValidationError { path: basePath, pattern: result.deriv, message, children: mempty }
+        in Left $ CatList.snoc result.errors err
   where
     validateItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
     validateItem { deriv, errors } { json, path } =
@@ -223,10 +225,10 @@ validateArrayItem schema path json pattern = case pattern of
           let tailRes = recur gTail
           in
             case Tuple (isValid headRes) (isValid tailRes) of
-              Tuple true  true  -> { deriv: Choice (group headRes.deriv gTail) tailRes.deriv, errors: empty }
-              Tuple true  false -> { deriv: group headRes.deriv gTail, errors: empty }
-              Tuple false true  -> { deriv: tailRes.deriv, errors: empty }
-              Tuple false false -> { deriv: Empty, errors: Seq.singleton $ aggError "Invalid array item (two alternatives tried)" (headRes.errors <> tailRes.errors) }
+              Tuple true  true  -> { deriv: Choice (group headRes.deriv gTail) tailRes.deriv, errors: mempty }
+              Tuple true  false -> { deriv: group headRes.deriv gTail, errors: mempty }
+              Tuple false true  -> { deriv: tailRes.deriv, errors: mempty }
+              Tuple false false -> { deriv: Empty, errors: pure $ aggError "Invalid array item (two alternatives tried)" (headRes.errors <> tailRes.errors) }
         else
           headRes { deriv = group headRes.deriv gTail }
 
@@ -242,25 +244,25 @@ validateArrayItem schema path json pattern = case pattern of
     recur = validateArrayItem schema path json
 
     error :: String -> ValidationError
-    error = (flip aggError) Seq.empty
+    error = (flip aggError) mempty
 
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path, pattern, message, children }
 
     fail :: String -> Derivative
-    fail message = { deriv: Empty, errors: Seq.singleton $ error message }
+    fail message = { deriv: Empty, errors: pure $ error message }
 
 validateObject :: Schema -> JsonPath -> StrMap Json -> Pattern -> Either ValidationErrors Unit
 validateObject schema basePath obj pattern =
   let
     props :: Array { name :: String, value :: Json, path :: JsonPath }
     props  = (\(Tuple name value) -> { name, value, path: basePath \ KeyNode name }) <$> (StrMap.toUnfoldable obj)
-    result = foldl (validateObjectProperty schema) { deriv: pattern, errors: Seq.empty } props
+    result = foldl (validateObjectProperty schema) { deriv: pattern, errors: mempty } props
   in
     if nullable result.deriv then deriv2Either result
     else
       let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames result.deriv)
-      in Left $ Seq.snoc result.errors $ ValidationError { path: basePath, pattern: result.deriv, message, children: Seq.empty }
+      in Left $ CatList.snoc result.errors $ ValidationError { path: basePath, pattern: result.deriv, message, children: mempty }
 
 validateObjectProperty :: Schema -> Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
 validateObjectProperty schema { deriv, errors } prop =
@@ -274,13 +276,13 @@ validateObjectProperty schema { deriv, errors } prop =
               validPropNames = propertyNames deriv
               err = error $ "Unexpected property " <> show prop.name <> ". Possible property names: " <> (intercalate ", " $ show <$> validPropNames)
             in
-              { deriv, errors: Seq.snoc errors err }
+              { deriv, errors: CatList.snoc errors err }
   where
     doValidate :: (String -> PropertyNamePattern -> Boolean) -> Maybe Derivative
     doValidate propNameMatcher = validateObjectProperty' schema (propNameMatcher prop.name) prop deriv
 
     error :: String -> ValidationError
-    error message = ValidationError { path: prop.path, pattern: deriv, message, children: Seq.empty }
+    error message = ValidationError { path: prop.path, pattern: deriv, message, children: mempty }
 
     matchLiteralProps :: String -> PropertyNamePattern -> Boolean
     matchLiteralProps actualName = case _ of
@@ -315,13 +317,13 @@ validateObjectProperty' schema matchesPropName prop pattern = case pattern of
     other -> fail $ "Unexpected pattern type found when validating object content (this is most likely a bug in the validator): " <> show pattern
   where
     error :: String -> ValidationError
-    error = (flip aggError) Seq.empty
+    error = (flip aggError) mempty
 
     aggError :: String -> ValidationErrors -> ValidationError
     aggError message children = ValidationError { path: prop.path, pattern, message, children }
 
     fail :: String -> Maybe Derivative
-    fail message = pure { deriv: Empty, errors: Seq.singleton $ error message }
+    fail message = pure { deriv: Empty, errors: pure $ error message }
 
     recur :: Pattern -> Maybe Derivative
     recur = validateObjectProperty' schema matchesPropName prop
@@ -330,7 +332,7 @@ simpleChoiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern
 simpleChoiceDeriv createError doValidate pattern =
   case choiceDeriv createError (Just <<< doValidate) pattern of
     Just deriv -> deriv
-    Nothing -> { deriv: Empty, errors: empty }
+    Nothing -> { deriv: Empty, errors: mempty }
 
 choiceDeriv :: (String -> ValidationErrors -> ValidationError) -> (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
 choiceDeriv createError doValidate pattern =
@@ -346,31 +348,32 @@ choiceDeriv createError doValidate pattern =
 
     mostSpecific :: ValidationErrors -> ValidationErrors
     mostSpecific errors =
-        let res = foldl foldF (Tuple 0 (empty :: ValidationErrors)) errors
+        let res = foldl foldF (Tuple 0 mempty) errors
         in snd res
       where
         foldF :: Tuple Int ValidationErrors -> ValidationError -> Tuple Int ValidationErrors
         foldF acc@(Tuple i es) e@(ValidationError { path }) =
           case JsonPath.length path of
             l | l < i -> acc
-              | l == i -> Tuple i (Seq.snoc es e)
+              | l == i -> Tuple i (CatList.snoc es e)
               | otherwise -> Tuple l (pure e)
 
     wrapErrors :: Derivative -> Derivative
     wrapErrors res =
-      if isValid res || Seq.length res.errors <= 1 then res
-      else
-        let
-          specific = mostSpecific res.errors
-          errPs = (\(ValidationError props) -> props.pattern) <$> specific
-          err = if Seq.length specific == 1 then
-                  unsafePartial $ fromJust $ Seq.head specific
-                else if foldl (&&) true (isLiteral <$> errPs) then
-                  createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) empty
-                else
-                  createError "None of allowed patterns matches JSON value" specific
-        in
-          { deriv: Empty, errors: pure err }
+      let specificEs = mostSpecific res.errors
+      in case CatList.uncons $ mostSpecific res.errors of
+          Nothing -> res
+          Just (Tuple _ xs) ->
+            if CatList.null xs then res
+            else
+              let
+                errPs = (\(ValidationError props) -> props.pattern) <$> specificEs
+                err = if foldl (&&) true (isLiteral <$> errPs) then
+                        createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) mempty
+                      else
+                        createError "None of allowed patterns matches JSON value" specificEs
+              in
+                { deriv: Empty, errors: pure err }
 
 choiceDeriv' :: (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
 choiceDeriv' doValidate = case _ of
@@ -383,7 +386,7 @@ choiceDeriv' doValidate = case _ of
     appendDeriv Nothing    j@(Just _) = j
     appendDeriv (Just d1)  (Just d2)  = Just
       case Tuple (isValid d1) (isValid d2) of
-        Tuple true  true  -> { deriv: Choice d1.deriv d2.deriv, errors: (empty :: ValidationErrors) }
+        Tuple true  true  -> { deriv: Choice d1.deriv d2.deriv, errors: (mempty :: ValidationErrors) }
         Tuple true  false -> d1
         Tuple false true  -> d2
         Tuple false false -> { deriv: Empty, errors: d1.errors <> d2.errors }
@@ -392,13 +395,13 @@ simpleRepeatDeriv :: (String -> ValidationError) -> (Pattern -> Derivative) -> P
 simpleRepeatDeriv createError doValidate pattern repeatCount =
   case repeatDeriv createError (Just <<< doValidate) pattern repeatCount of
     Just d -> d
-    Nothing -> { deriv: Empty, errors: empty }
+    Nothing -> { deriv: Empty, errors: mempty }
 
 repeatDeriv :: (String -> ValidationError) -> (Pattern -> Maybe Derivative) -> Pattern -> RepeatCount -> Maybe Derivative
 repeatDeriv createError doValidate pattern (RepeatCount { min, max }) =
   (doValidate pattern) <#> \result ->
     if maybe false (\m -> m <= 0) max then
-      { deriv: Empty, errors: Seq.singleton $ createError "Schema doesn't allow another repetition of this item or property." }
+      { deriv: Empty, errors: pure $ createError "Schema doesn't allow another repetition of this item or property." }
     else
       let
         nextMax = countDown <$> max
