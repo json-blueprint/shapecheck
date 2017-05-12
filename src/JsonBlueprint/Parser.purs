@@ -19,7 +19,7 @@ import Data.Array.Partial (head, tail)
 import Data.Char (fromCharCode, toLower)
 import Data.Char.Unicode (isHexDigit)
 import Data.Either (Either(..))
-import Data.Eulalie.Parser (Parser, cut, either, expected, fail, many, maybe, sat, sepBy, sepBy1)
+import Data.Eulalie.Parser (Parser, cut, either, expected, fail, item, many, maybe, sat, sepBy, sepBy1)
 import Data.Foldable (class Foldable, foldl, foldr)
 import Data.Int (fromNumber, fromString, fromStringAs, hexadecimal)
 import Data.Lazy (Lazy, defer, force)
@@ -39,6 +39,38 @@ lazyParser :: forall a. Lazy (Parser Char a) -> Parser Char a
 lazyParser lp = do
   pure unit
   force lp
+
+spaceOrComment :: Parser Char Unit
+spaceOrComment = do
+    _ <- S.spaces
+    _ <- maybe comment
+    pure unit
+  where
+    comment :: Parser Char Unit
+    comment = do
+      _ <- blockComment <|> lineComment
+      _ <- S.spaces
+      comment <|> pure unit
+
+    blockComment :: Parser Char Unit
+    blockComment = do
+        _ <- S.string "/*"
+        cut do
+          _ <- expected body "*/"
+          pure unit
+      where
+        body :: Parser Char Unit
+        body = item >>= \c ->
+          if c == '*' then
+            item >>= \c2 ->
+              if c2 == '/' then pure unit
+              else body
+          else body
+
+    lineComment :: Parser Char Unit
+    lineComment = do
+      _ <- S.string "//"
+      const unit <$> (cut $ many $ C.notChar '\n')
 
 stringChar :: Parser Char Char
 stringChar =  sat \c -> c /= '\\' && c /= '"'
@@ -123,28 +155,28 @@ integer = do
 
 dtProp :: forall v d. String -> Parser Char v -> (v -> d -> d) -> Parser Char (d -> d)
 dtProp name valP f = do
-  _ <- S.spaces
+  _ <- spaceOrComment
   _ <- S.string name
-  _ <- S.spaces
+  _ <- spaceOrComment
   _ <- C.char '='
   cut do
-    _   <- S.spaces
+    _   <- spaceOrComment
     val <- valP
-    _   <- S.spaces
+    _   <- spaceOrComment
     pure $ f val
 
 commaSeparator :: Parser Char Unit
 commaSeparator = do
-  _ <- S.spaces
+  _ <- spaceOrComment
   _ <- C.char ','
-  _ <- S.spaces
+  _ <- spaceOrComment
   pure unit
 
 commaSeparated :: forall i o. Char -> Parser Char i -> Char -> (List i -> o) -> Parser Char o
 commaSeparated open itemParser close transform = do
     _ <- C.char open
     cut do
-      _  <- S.spaces
+      _  <- spaceOrComment
       -- this is a little bit more complicated to produce better error messages - once we start
       -- parsing an item, we make any error unrecoverable
       closeOnly <|> oneOrMoreItemsAndClose
@@ -155,7 +187,7 @@ commaSeparated open itemParser close transform = do
     oneOrMoreItemsAndClose :: Parser Char o
     oneOrMoreItemsAndClose = do
       is <- sepBy commaSeparator (cut itemParser)
-      _  <- S.spaces
+      _  <- spaceOrComment
       _  <- C.char close
       pure $ transform is
 
@@ -165,7 +197,7 @@ dtProps a b = (propList a b) <|> pure a
   where
     propList :: d -> Array (Parser Char (d -> d)) -> Parser Char d
     propList dt propParsers = do
-      _ <- S.spaces
+      _ <- spaceOrComment
       commaSeparated '(' (reduce propParsers) ')' (foldl (#) dt)
 
     reduce :: Array (Parser Char (d -> d)) -> Parser Char (d -> d)
@@ -260,14 +292,14 @@ withChoice :: Parser Char Pattern -> Parser Char Pattern
 withChoice contentP = do
     first <- contentP
     cut do
-      _ <- S.spaces
+      _ <- spaceOrComment
       (parseChoice first) <|> pure first
   where
     parseChoice :: Pattern -> Parser Char Pattern
     parseChoice first = do
       _ <- C.char '|'
       cut do
-        _ <- S.spaces
+        _ <- spaceOrComment
         second <- lazyParser (defer \_ -> withChoice contentP)
         pure $ Choice first second
 
@@ -275,7 +307,7 @@ repeatable :: Parser Char Pattern -> Parser Char Pattern
 repeatable valueParser = do
   value <- valueParser
   cut do
-    _ <- S.spaces
+    _ <- spaceOrComment
     count <- (Just <$> repeatCount) <|> pure Nothing
     pure $ case count of
       Just c  -> Repeat value c
@@ -292,9 +324,9 @@ repeatCount =
     parseUpperBound = do
       _ <- C.char ','
       cut do
-        _ <- S.spaces
+        _ <- spaceOrComment
         max <- (Just <$> nonNegativeInt) <|> pure Nothing
-        _ <- S.spaces
+        _ <- spaceOrComment
         _ <- C.char '}'
         pure max
 
@@ -302,9 +334,9 @@ repeatCount =
     parseBounds = do
       _ <- C.char '{'
       cut do
-        _ <- S.spaces
+        _ <- spaceOrComment
         min <- nonNegativeInt
-        _ <- S.spaces
+        _ <- spaceOrComment
         max <- (const (Just min) <$> C.char '}') <|> parseUpperBound
         pure $ RepeatCount { min, max }
 
@@ -334,10 +366,10 @@ identifier = do
 property :: Parser Char Pattern
 property = do
     name <- propName
-    _    <- S.spaces
+    _    <- spaceOrComment
     _    <- C.char ':'
     cut do
-      _     <- S.spaces
+      _     <- spaceOrComment
       value <- valuePatternParser
       pure $ Property { name, value }
   where
@@ -386,9 +418,9 @@ objectOrNamedPattern = do
 
     refinementSep :: Parser Char Unit
     refinementSep = do
-      _ <- S.spaces
+      _ <- spaceOrComment
       _ <- S.string "with"
-      _ <- S.spaces
+      _ <- spaceOrComment
       pure unit
 
     refinedObject :: ObjectRefinement -> Parser Char Pattern
@@ -431,23 +463,27 @@ valuePatternParser = withChoice $ lazyParser (defer \_ -> nonChoiceValuePattern)
 namedPatternDefinition :: Parser Char { name :: String, pattern :: Pattern }
 namedPatternDefinition = do
   name <- identifier
-  _    <- S.spaces
+  _    <- spaceOrComment
   cut do
     _ <- C.char '='
     cut do
-      _       <- S.spaces
+      _       <- spaceOrComment
       pattern <- valuePatternParser
       pure { name, pattern }
 
 schemaParser :: Parser Char Schema
-schemaParser = (sepBy S.spaces namedPatternDefinition) >>= toSchema where
-  appendPattern :: Parser Char Schema -> { name :: String, pattern :: Pattern } -> Parser Char Schema
-  appendPattern schemaP { name, pattern } = schemaP >>= \schema ->
-    if isJust $ Schema.lookupPattern name schema then expected fail $ "unique names of all patterns; multiple definitions of `" <> name <> "` found in schema"
-    else pure $ Schema.add name pattern schema
+schemaParser = do
+    _  <- spaceOrComment
+    ps <- sepBy spaceOrComment namedPatternDefinition
+    toSchema ps
+  where
+    appendPattern :: Parser Char Schema -> { name :: String, pattern :: Pattern } -> Parser Char Schema
+    appendPattern schemaP { name, pattern } = schemaP >>= \schema ->
+      if isJust $ Schema.lookupPattern name schema then expected fail $ "unique names of all patterns; multiple definitions of `" <> name <> "` found in schema"
+      else pure $ Schema.add name pattern schema
 
-  toSchema :: List { name :: String, pattern :: Pattern } -> Parser Char Schema
-  toSchema = foldl appendPattern (pure Schema.empty)
+    toSchema :: List { name :: String, pattern :: Pattern } -> Parser Char Schema
+    toSchema = foldl appendPattern (pure Schema.empty)
 
 jsonPathParser :: Parser Char JsonPath
 jsonPathParser = do
