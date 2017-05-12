@@ -4,6 +4,7 @@ module JsonBlueprint.Schema (
   add,
   empty,
   lookupPattern,
+  patternNames,
   validateAndSimplify,
   showProblems,
   singleton) where
@@ -46,6 +47,9 @@ singleton name pattern = Schema $ StrMap.insert name pattern StrMap.empty
 
 lookupPattern :: PatternDefName -> Schema -> Maybe Pattern
 lookupPattern name (Schema ps) = StrMap.lookup name ps
+
+patternNames :: Schema -> Array String
+patternNames (Schema ps) = StrMap.keys ps
 
 type PatternDefName = String
 type SchemaProblem = { message :: String, inDef :: Maybe PatternDefName, pattern :: Pattern }

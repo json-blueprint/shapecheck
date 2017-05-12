@@ -22,7 +22,7 @@ import Data.Monoid (mempty)
 import Data.StrMap (StrMap)
 import Data.Tuple (Tuple(..), snd)
 import JsonBlueprint.JsonPath (JsonPath, JsonPathNode(..), (\))
-import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), group, propertyNames)
+import JsonBlueprint.Pattern (Bound(..), GenRegex(..), Pattern(..), PropertyNamePattern(..), RepeatCount(..), filterGroup, group, propertyNames)
 import JsonBlueprint.Schema (Schema, lookupPattern)
 import Math (remainder)
 import Partial.Unsafe (unsafePartial)
@@ -207,9 +207,7 @@ validateArray schema basePath is pattern =
     in
       if nullable result.deriv then deriv2Either result
       else
-        let
-          message = "Unexpected end of array. Pattern for remaining items: " <> show result.deriv
-          err = ValidationError { path: basePath, pattern: result.deriv, message, children: mempty }
+        let err = ValidationError { path: basePath, pattern: result.deriv, message: "Unexpected end of array.", children: mempty }
         in Left $ CatList.snoc result.errors err
   where
     validateItem :: Derivative -> { json :: Json, path :: JsonPath } -> Derivative
@@ -261,8 +259,10 @@ validateObject schema basePath obj pattern =
   in
     if nullable result.deriv then deriv2Either result
     else
-      let message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames result.deriv)
-      in Left $ CatList.snoc result.errors $ ValidationError { path: basePath, pattern: result.deriv, message, children: mempty }
+      let
+        mandatoryContent = filterGroup (not <<< nullable) result.deriv
+        message = "Object is missing required properties: " <> (intercalate ", " $ propertyNames mandatoryContent)
+      in Left $ CatList.snoc result.errors $ ValidationError { path: basePath, pattern: mandatoryContent, message, children: mempty }
 
 validateObjectProperty :: Schema -> Derivative -> { name :: String, value :: Json, path :: JsonPath } -> Derivative
 validateObjectProperty schema { deriv, errors } prop =

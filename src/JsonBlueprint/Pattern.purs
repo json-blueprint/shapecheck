@@ -2,6 +2,7 @@ module JsonBlueprint.Pattern (
   Bound(..),
   emptyNumericDtProps,
   emptyStringDtProps,
+  filterGroup,
   flattenChoice,
   flattenGroup,
   foldChoice,
@@ -243,6 +244,9 @@ foldGroup :: forall o. (o -> Pattern -> o) -> o -> Pattern -> o
 foldGroup f accu = case _ of
   Group p1 p2 -> foldGroup f (foldGroup f accu p1) p2
   other -> f accu other
+
+filterGroup :: (Pattern -> Boolean) -> Pattern -> Pattern
+filterGroup f = foldGroup (\acc p -> if f p then group acc p else acc) Empty
 
 flattenGroup :: Pattern -> CatList Pattern
 flattenGroup = foldGroup CatList.snoc CatList.empty

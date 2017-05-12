@@ -23,7 +23,7 @@ import Data.Maybe (Maybe(..))
 import Data.Monoid (mempty)
 import Data.String (fromCharArray)
 import JsonBlueprint.Parser (schemaParser)
-import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, showProblems, validateAndSimplify)
+import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, patternNames, showProblems, validateAndSimplify)
 import JsonBlueprint.Validator (ValidationError(..))
 
 type SchemaString = String
@@ -31,7 +31,10 @@ type SchemaString = String
 newtype JsValidationError = JsValidationError { message :: String, path :: String, pattern :: String, children :: Array JsValidationError }
 type JsValidationResult = { valid :: Boolean, errors :: Array JsValidationError }
 
-type JsValidator = { validate :: Fn2 PatternDefName Json JsValidationResult }
+type JsValidator = {
+  validate :: Fn2 PatternDefName Json JsValidationResult,
+  patternNames :: Array String
+}
 
 createValidator :: SchemaString -> JsValidator
 createValidator schema = case createValidator' schema of
@@ -42,7 +45,10 @@ createValidator' :: SchemaString -> Either String JsValidator
 createValidator' schemaStr = do
     schema <- parseSchema schemaStr
     simplified <- checkSchema schema
-    pure { validate: mkFn2 (unsafeValidate simplified) }
+    pure {
+      validate: mkFn2 (unsafeValidate simplified),
+      patternNames: patternNames schema
+    }
   where
     checkSchema :: Schema -> Either String Schema
     checkSchema schema = case validateAndSimplify schema of
