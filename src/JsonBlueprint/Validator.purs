@@ -361,19 +361,19 @@ choiceDeriv createError doValidate pattern =
     wrapErrors :: Derivative -> Derivative
     wrapErrors res =
       let specificEs = mostSpecific res.errors
-      in case CatList.uncons $ mostSpecific res.errors of
-          Nothing -> res
-          Just (Tuple _ xs) ->
-            if CatList.null xs then res
-            else
-              let
-                errPs = (\(ValidationError props) -> props.pattern) <$> specificEs
-                err = if foldl (&&) true (isLiteral <$> errPs) then
-                        createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) mempty
-                      else
-                        createError "None of allowed patterns matches JSON value" specificEs
-              in
-                { deriv: Empty, errors: pure err }
+      in case CatList.uncons specificEs of
+        Nothing -> res
+        Just (Tuple _ xs) ->
+          if CatList.null xs then res { errors = specificEs }
+          else
+            let
+              errPs = (\(ValidationError props) -> props.pattern) <$> specificEs
+              err = if foldl (&&) true (isLiteral <$> errPs) then
+                      createError ("Expected one of: " <> intercalate ", " (show <$> errPs)) mempty
+                    else
+                      createError "None of allowed patterns matches JSON value" specificEs
+            in
+              { deriv: Empty, errors: pure err }
 
 choiceDeriv' :: (Pattern -> Maybe Derivative) -> Pattern -> Maybe Derivative
 choiceDeriv' doValidate = case _ of
