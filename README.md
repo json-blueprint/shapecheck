@@ -1,5 +1,5 @@
 # shapecheck: a JSON Blueprint validator for JavaScript
-**shapecheck** validates structure of JSON based on a schema defined in [JSON Blueprint](http://www.json-blueprint.org).
+**shapecheck** validates structure of JSON based on a schema defined in [JSON Blueprint](httpjson-blueprint.org).
 
 ## Installation
 `npm install --save shapecheck`
@@ -31,8 +31,26 @@ Result = {
 
 Error = {
     message: String,
-    path: String,
-    pattern: String,
+
+    /**
+     * Path in the JSON document where the validation error occurred
+     */
+    path: [(Int | String)*],
+
+    /**
+     * String representation of the path (jq-like)
+     */
+    pathString: String,
+
+    /**
+     * String representation of the pattern for the JSON value at path
+     */
+    patternString: String,
+
+    /**
+     * When pattern is a choice, the children array contains validation
+     * errors from all of its branches
+     */
     children: [Error*]
 }
 ```

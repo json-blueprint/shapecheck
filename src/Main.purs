@@ -5,7 +5,9 @@ module Main (
 ) where
 
 import Prelude
+import Data.Argonaut.Core as Json
 import Data.Array as Arr
+import Data.Int as Int
 import Data.String as Str
 import JsonBlueprint.Validator as Validator
 import Control.Monad.Eff (Eff)
@@ -22,13 +24,21 @@ import Data.Function.Uncurried (Fn2, mkFn2)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (mempty)
 import Data.String (fromCharArray)
+import JsonBlueprint.JsonPath (JsonPath(..), JsonPathNode(..))
 import JsonBlueprint.Parser (schemaParser)
 import JsonBlueprint.Schema (PatternDefName, Schema, lookupPattern, patternNames, showProblems, validateAndSimplify)
 import JsonBlueprint.Validator (ValidationError(..))
 
 type SchemaString = String
 
-newtype JsValidationError = JsValidationError { message :: String, path :: String, pattern :: String, children :: Array JsValidationError }
+newtype JsValidationError = JsValidationError {
+  message :: String,
+  path :: Array Json,
+  pathString :: String,
+  patternString :: String,
+  children :: Array JsValidationError
+}
+
 type JsValidationResult = { valid :: Boolean, errors :: Array JsValidationError }
 
 type JsValidator = {
@@ -71,9 +81,22 @@ validate schema patternName json =
     failure2Js :: (Array ValidationError) -> JsValidationResult
     failure2Js es = { valid: false, errors: Arr.fromFoldable $ error2Js <$> es }
 
+    pathNode2Js :: JsonPathNode -> Json
+    pathNode2Js (IdxNode i) = Json.fromNumber $ Int.toNumber i
+    pathNode2Js (KeyNode n) = Json.fromString n
+
+    path2Js :: JsonPath -> Array Json
+    path2Js (JsonPath xs) = pathNode2Js <$> Arr.fromFoldable xs
+
     error2Js :: ValidationError -> JsValidationError
     error2Js (ValidationError { path, pattern, message, children }) =
-      JsValidationError { message, path: show path, pattern: show pattern, children: Arr.fromFoldable $ error2Js <$> children }
+      JsValidationError {
+        message,
+        path: path2Js path,
+        pathString: show path,
+        patternString: show pattern,
+        children: Arr.fromFoldable $ error2Js <$> children
+      }
 
     valid :: JsValidationResult
     valid = { valid: true, errors: [] }
