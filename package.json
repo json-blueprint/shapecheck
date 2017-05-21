@@ -1,6 +1,6 @@
 {
   "name": "shapecheck",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "a JSON Blueprint validator",
   "main": "shapecheck.js",
   "keywords": [
@@ -11,5 +11,5 @@
   ],
   "author": "Martin Schmied",
   "license": "MIT",
-  "homepage": "https://json-blueprint.org"
+  "homepage": "http://json-blueprint.org"
 }
