@@ -1,5 +1,5 @@
 # shapecheck: a JSON Blueprint validator for JavaScript
-**shapecheck** validates structure of JSON based on a schema defined in [JSON Blueprint](httpjson-blueprint.org).
+**shapecheck** validates structure of JSON based on a schema defined in [JSON Blueprint](http://json-blueprint.org).
 
 ## Installation
 `npm install --save shapecheck`
